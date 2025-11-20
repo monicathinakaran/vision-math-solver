@@ -1,0 +1,174 @@
+from fastapi import FastAPI, UploadFile, File, Form
+from pydantic import BaseModel
+import shutil
+import os
+from PIL import Image
+from sympy import sympify, solve, Symbol, Eq, parse_expr, latex
+from sympy.parsing.sympy_parser import standard_transformations, implicit_multiplication_application
+import google.generativeai as genai
+from pathlib import Path # <--- Import Path
+from dotenv import load_dotenv
+
+# 1. Explicitly find the path to the .env file in the current folder
+env_path = Path(__file__).parent / ".env"
+
+# 2. Load that specific file
+load_dotenv(dotenv_path=env_path)
+
+# 3. Now get the key
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+
+if not GOOGLE_API_KEY:
+    raise ValueError(f"No API key found. Please ensure '{env_path}' exists and contains GOOGLE_API_KEY.")
+
+import google.generativeai as genai
+genai.configure(api_key=GOOGLE_API_KEY)
+
+genai.configure(api_key=GOOGLE_API_KEY)
+app = FastAPI()
+
+class MathRequest(BaseModel):
+    equation: str
+
+# --- ENDPOINT 1: EXTRACT TEXT (OCR) ---
+@app.post("/api/extract")
+async def extract_from_image(file: UploadFile = File(...)):
+    os.makedirs("uploads", exist_ok=True)
+    file_path = f"uploads/{file.filename}"
+    with open(file_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+    
+    try:
+        # Changed: Now extracts FULL text, not just equation
+        extracted_text = image_to_full_text(file_path) 
+        return {"equation": extracted_text}
+    except Exception as e:
+        return {"error": str(e)}
+
+# --- ENDPOINT 2: SOLVE (Calculator + AI Logic) ---
+@app.post("/api/calculate")
+async def calculate_solution(request: MathRequest):
+    problem_text = request.equation
+    
+    solution_result = None
+    
+    # 1. Try SymPy first (Good for simple x + y = z)
+    try:
+        cleaned_equation = sanitize_for_sympy(problem_text)
+        solution_result = solve_with_sympy(cleaned_equation)
+    except Exception:
+        solution_result = None 
+
+    # 2. If SymPy failed, use AI to get the FINAL ANSWER
+    if solution_result is None or solution_result == "[]":
+        try:
+            # New function to get just the result in LaTeX
+            solution_result = solve_final_answer_with_ai(problem_text)
+        except Exception as e:
+            solution_result = r"\text{Error generating solution}"
+
+    # 3. Generate Full Explanation
+    explanation = "Explanation unavailable."
+    try:
+        explanation = generate_explanation(problem_text, solution_result)
+    except Exception as e:
+        explanation = f"Explanation Error: {e}"
+        
+    return {
+        "solution": str(solution_result),
+        "explanation": explanation
+    }
+
+# --- HELPER FUNCTIONS ---
+
+def image_to_full_text(image_path):
+    """Extracts ALL text for context (Word problems, Signals, etc.)"""
+    model = genai.GenerativeModel('models/gemini-2.5-flash')
+    img = Image.open(image_path)
+    prompt = """
+    Extract the full math problem from this image.
+    Include the main equation and any context (like "Find the impulse response").
+    Return plain text.
+    """
+    response = model.generate_content([prompt, img])
+    return response.text.strip()
+
+def sanitize_for_sympy(equation):
+    # Basic cleanup for simple algebra
+    equation = equation.replace("$", "").replace(r"\(", "").replace(r"\)", "")
+    equation = equation.replace("^", "**").replace(r"\times", "*")
+    return equation
+
+def solve_with_sympy(equation_str):
+    # (Same logic as before - good for Algebra I/II)
+    x = Symbol('x')
+    transformations = (standard_transformations + (implicit_multiplication_application,))
+    if "=" in equation_str:
+        parts = equation_str.split("=")
+        lhs = parse_expr(parts[0], transformations=transformations)
+        rhs = parse_expr(parts[1], transformations=transformations)
+        eqn = Eq(lhs, rhs)
+        result = solve(eqn, x)
+        return latex(result)
+    else:
+        return None # Skip expressions for now, let AI handle them
+
+def solve_final_answer_with_ai(problem_text):
+    model = genai.GenerativeModel('models/gemini-2.5-flash')
+    
+    # Corrected Prompt
+    prompt = f"""
+    Solve this math problem: "{problem_text}"
+    
+    I need ONLY the final answer to display in a result card.
+    
+    RULES:
+    1. Return ONLY the math result in LaTeX.
+    2. Do NOT use dollar signs ($).
+    3. If there are multiple parts (e.g., H(z) AND h[n]), separate them with a double backslash (\\\\).
+       Example Output: H(z) = \\frac{{1}}{{1-z^{{-1}}}} \\\\ h[n] = u[n]
+    """
+    
+    response = model.generate_content(prompt)
+    
+    # Cleanup
+    clean = response.text.replace("```latex", "").replace("```", "").replace("$$", "").replace("$", "")
+    return clean.strip()
+
+def generate_explanation(equation, solution):
+    model = genai.GenerativeModel('models/gemini-2.5-flash')
+    
+    prompt = f"""
+    You are a math tutor. Problem: "{equation}". 
+    
+    Explain the solution step-by-step.
+    
+    STRICT FORMATTING RULES:
+    1. Do NOT use bullet points (no *, no -). Write in full paragraphs.
+    2. Use **bold** for Step titles (e.g., **Step 1:**).
+    3. Start every new step on a new line.
+    4. Use LaTeX for math, wrapped in single dollar signs ($).
+    5. Do NOT use Markdown Headers (###).
+    6. Do NOT add extra asterisks on their own lines.
+    """
+    
+    response = model.generate_content(prompt)
+    
+    text = response.text
+    
+    # --- ROBUST CLEANUP ---
+    # 1. Fix LaTeX double dollars
+    text = text.replace("$$", "$")
+    
+    # 2. Remove Markdown Headers
+    text = text.replace("### ", "").replace("## ", "").replace("# ", "")
+    
+    # 3. Remove stray bullet points/asterisks that cause weird indentation
+    text = text.replace("\n* ", "\n").replace("\n- ", "\n")
+    text = text.replace("\n * ", "\n") # Indented bullets
+    
+    # 4. Remove the specific "lone asterisk" artifact you saw
+    text = text.replace("\n*\n", "\n")
+    
+    return text.strip()
+    return text

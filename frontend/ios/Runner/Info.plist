@@ -1,0 +1,9 @@
+<key>NSPhotoLibraryUsageDescription</key>
+    <string>This app needs access to your photo library to solve math problems from images.</string>
+    <key>NSCameraUsageDescription</key>
+    <string>This app needs access to your camera to take photos of math problems.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>This app needs access to your microphone (if you take a video) to capture problem audio.</string>
+
+</dict>
+</plist>

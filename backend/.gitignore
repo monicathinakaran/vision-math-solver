@@ -1,0 +1,10 @@
+# .gitignore
+.env
+backend/.env
+backend/venv/
+__pycache__/
+.DS_Store
+.idea/
+.vscode/
+build/
+app/build/
