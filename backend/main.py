@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, Form
+from fastapi import FastAPI, UploadFile, File, HTTPException
 from pydantic import BaseModel
 import shutil
 import os
@@ -7,7 +7,11 @@ from sympy import sympify, solve, Symbol, Eq, parse_expr, latex
 from sympy.parsing.sympy_parser import standard_transformations, implicit_multiplication_application
 import google.generativeai as genai
 from pathlib import Path # <--- Import Path
-from dotenv import load_dotenv
+
+# --- DB IMPORTS ---
+from motor.motor_asyncio import AsyncIOMotorClient
+from datetime import datetime
+from dotenv import load_dotenv # Make sure you have python-dotenv installed
 
 # 1. Explicitly find the path to the .env file in the current folder
 env_path = Path(__file__).parent / ".env"
@@ -17,6 +21,7 @@ load_dotenv(dotenv_path=env_path)
 
 # 3. Now get the key
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+MONGO_URL = os.getenv("MONGO_URL")
 
 if not GOOGLE_API_KEY:
     raise ValueError(f"No API key found. Please ensure '{env_path}' exists and contains GOOGLE_API_KEY.")
@@ -27,8 +32,25 @@ genai.configure(api_key=GOOGLE_API_KEY)
 genai.configure(api_key=GOOGLE_API_KEY)
 app = FastAPI()
 
+# --- DATABASE SETUP ---
+client = AsyncIOMotorClient(MONGO_URL)
+db = client.math_solver_db # This creates a DB named 'math_solver_db'
+history_collection = db.history # This creates a collection named 'history
+
 class MathRequest(BaseModel):
     equation: str
+
+class HistoryItem(BaseModel):
+    equation: str
+    solution: str
+    explanation: str
+    timestamp: str = None
+
+# --- ENDPOINTS ---
+
+@app.get("/")
+def read_root():
+    return {"status": "Server is running", "db_status": "Connected to MongoDB"}
 
 # --- ENDPOINT 1: EXTRACT TEXT (OCR) ---
 @app.post("/api/extract")
@@ -79,6 +101,33 @@ async def calculate_solution(request: MathRequest):
         "explanation": explanation
     }
 
+# 3. SAVE HISTORY (New!)
+@app.post("/api/history")
+async def save_history(item: HistoryItem):
+    try:
+        # Add current time
+        item.timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+        # Insert into MongoDB
+        await history_collection.insert_one(item.dict())
+        return {"message": "Saved to History"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# 4. GET HISTORY (New!)
+@app.get("/api/history")
+async def get_history():
+    try:
+        # Fetch latest 20 items, sorted by newest
+        history_list = []
+        cursor = history_collection.find({}).sort("_id", -1).limit(20)
+        async for document in cursor:
+            # Convert ObjectId to string for JSON compatibility
+            document["_id"] = str(document["_id"])
+            history_list.append(document)
+        return history_list
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
 # --- HELPER FUNCTIONS ---
 
 def image_to_full_text(image_path):
