@@ -7,6 +7,7 @@ from sympy import sympify, solve, Symbol, Eq, parse_expr, latex
 from sympy.parsing.sympy_parser import standard_transformations, implicit_multiplication_application
 import google.generativeai as genai
 from pathlib import Path # <--- Import Path
+import certifi
 
 # --- DB IMPORTS ---
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -33,7 +34,7 @@ genai.configure(api_key=GOOGLE_API_KEY)
 app = FastAPI()
 
 # --- DATABASE SETUP ---
-client = AsyncIOMotorClient(MONGO_URL)
+client = AsyncIOMotorClient(MONGO_URL, tlsCAFile=certifi.where())
 db = client.math_solver_db # This creates a DB named 'math_solver_db'
 history_collection = db.history # This creates a collection named 'history
 
