@@ -47,6 +47,12 @@ class HistoryItem(BaseModel):
     explanation: str
     timestamp: str = None
 
+class ChatRequest(BaseModel):
+    context: str  # The original math problem + solution
+    history: list # List of previous Q&A e.g. [{"role": "user", "parts": ["hi"]}]
+    message: str  # The new question
+
+
 # --- ENDPOINTS ---
 
 @app.get("/")
@@ -129,11 +135,46 @@ async def get_history():
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     
+# 5. CHAT WITH AI TUTOR (New!)
+@app.post("/api/chat")
+async def chat_with_tutor(request: ChatRequest):
+    try:
+        model = genai.GenerativeModel('models/gemini-2.5-flash')
+        
+        # Construct the "System Prompt" to give the AI context
+        # We tell it: "You are a tutor. Here is the problem the student is looking at..."
+        system_instruction = f"""
+        You are a helpful math tutor. The student is asking questions about this specific problem:
+        
+        CONTEXT:
+        {request.context}
+        
+        RULES:
+        1. Answer the student's question clearly.
+        2. Use the Context above to be specific.
+        3. Be concise (max 2-3 sentences unless asked for more).
+        4. Use LaTeX for math equations (wrapped in single $).
+        """
+        
+        # Build the chat history for Gemini
+        chat = model.start_chat(history=request.history)
+        
+        # Send the message with the system instruction prepended (soft-prompting)
+        full_prompt = f"{system_instruction}\n\nStudent Question: {request.message}"
+        
+        response = chat.send_message(full_prompt)
+        
+        return {"reply": response.text.replace("$$", "$")} # Clean LaTeX
+        
+    except Exception as e:
+        return {"error": str(e)}
+    
+    
 # --- HELPER FUNCTIONS ---
 
 def image_to_full_text(image_path):
     """Extracts ALL text for context (Word problems, Signals, etc.)"""
-    model = genai.GenerativeModel('models/gemini-2.5-flash')
+    model = genai.GenerativeModel('models/gemini-2.5-pro')
     img = Image.open(image_path)
     prompt = """
     Extract the full math problem from this image.
@@ -164,7 +205,7 @@ def solve_with_sympy(equation_str):
         return None # Skip expressions for now, let AI handle them
 
 def solve_final_answer_with_ai(problem_text):
-    model = genai.GenerativeModel('models/gemini-2.5-flash')
+    model = genai.GenerativeModel('models/gemini-2.5-pro')
     
     # Corrected Prompt
     prompt = f"""
@@ -186,7 +227,7 @@ def solve_final_answer_with_ai(problem_text):
     return clean.strip()
 
 def generate_explanation(equation, solution):
-    model = genai.GenerativeModel('models/gemini-2.5-flash')
+    model = genai.GenerativeModel('models/gemini-2.5-pro')
     
     prompt = f"""
     You are a math tutor. Problem: "{equation}". 
