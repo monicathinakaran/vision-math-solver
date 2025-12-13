@@ -8,6 +8,7 @@ from sympy.parsing.sympy_parser import standard_transformations, implicit_multip
 import google.generativeai as genai
 from pathlib import Path # <--- Import Path
 import certifi
+from bson import ObjectId
 
 # --- DB IMPORTS ---
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -43,9 +44,10 @@ class MathRequest(BaseModel):
 
 class HistoryItem(BaseModel):
     equation: str
-    solution: str
-    explanation: str
+    solution: str = None     # Changed to optional (None) because "Hint" mode won't have a solution yet
+    explanation: str = None  # Changed to optional
     timestamp: str = None
+    chat_history: list = []  # <--- NEW: Stores the chat logs
 
 class ChatRequest(BaseModel):
     context: str  # The original math problem + solution
@@ -169,7 +171,24 @@ async def chat_with_tutor(request: ChatRequest):
     except Exception as e:
         return {"error": str(e)}
     
-    
+# 6. UPDATE HISTORY (Append Chat Messages)
+class ChatUpdate(BaseModel):
+    chat_history: list
+
+@app.put("/api/history/{id}")
+async def update_history_chat(id: str, update: ChatUpdate):
+    try:
+        # Update the specific document with the new chat history
+        result = await history_collection.update_one(
+            {"_id": ObjectId(id)},
+            {"$set": {"chat_history": update.chat_history}}
+        )
+        if result.matched_count == 0:
+            raise HTTPException(status_code=404, detail="History item not found")
+        return {"message": "Chat updated"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))   
+ 
 # --- HELPER FUNCTIONS ---
 
 def image_to_full_text(image_path):
