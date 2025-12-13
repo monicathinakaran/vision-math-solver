@@ -174,7 +174,7 @@ async def chat_with_tutor(request: ChatRequest):
 
 def image_to_full_text(image_path):
     """Extracts ALL text for context (Word problems, Signals, etc.)"""
-    model = genai.GenerativeModel('models/gemini-2.5-pro')
+    model = genai.GenerativeModel('models/gemini-2.5-flash')
     img = Image.open(image_path)
     prompt = """
     Extract the full math problem from this image.
@@ -205,7 +205,7 @@ def solve_with_sympy(equation_str):
         return None # Skip expressions for now, let AI handle them
 
 def solve_final_answer_with_ai(problem_text):
-    model = genai.GenerativeModel('models/gemini-2.5-pro')
+    model = genai.GenerativeModel('models/gemini-2.5-flash')
     
     # Corrected Prompt
     prompt = f"""
@@ -227,7 +227,7 @@ def solve_final_answer_with_ai(problem_text):
     return clean.strip()
 
 def generate_explanation(equation, solution):
-    model = genai.GenerativeModel('models/gemini-2.5-pro')
+    model = genai.GenerativeModel('models/gemini-2.5-flash')
     
     prompt = f"""
     You are a math tutor. Problem: "{equation}". 
