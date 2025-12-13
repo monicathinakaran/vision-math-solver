@@ -5,10 +5,13 @@ import os
 from PIL import Image
 from sympy import sympify, solve, Symbol, Eq, parse_expr, latex
 from sympy.parsing.sympy_parser import standard_transformations, implicit_multiplication_application
-import google.generativeai as genai
+from groq import Groq
 from pathlib import Path # <--- Import Path
 import certifi
 from bson import ObjectId
+import easyocr
+import cv2
+import numpy as np
 
 # --- DB IMPORTS ---
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -22,16 +25,17 @@ env_path = Path(__file__).parent / ".env"
 load_dotenv(dotenv_path=env_path)
 
 # 3. Now get the key
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 MONGO_URL = os.getenv("MONGO_URL")
+groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
-if not GOOGLE_API_KEY:
-    raise ValueError(f"No API key found. Please ensure '{env_path}' exists and contains GOOGLE_API_KEY.")
+if not GROQ_API_KEY:
+    raise ValueError(f"No API key found. Please ensure '{env_path}' exists and contains GROQ_API_KEY.")
 
 import google.generativeai as genai
-genai.configure(api_key=GOOGLE_API_KEY)
+genai.configure(api_key=GROQ_API_KEY)
 
-genai.configure(api_key=GOOGLE_API_KEY)
+genai.configure(api_key=GROQ_API_KEY)
 app = FastAPI()
 
 # --- DATABASE SETUP ---
@@ -71,10 +75,17 @@ async def extract_from_image(file: UploadFile = File(...)):
     
     try:
         # Changed: Now extracts FULL text, not just equation
-        extracted_text = image_to_full_text(file_path) 
-        return {"equation": extracted_text}
+        raw_text = image_to_full_text(file_path)
+
+        if raw_text:
+            cleaned = clean_ocr_text_with_ai(raw_text)
+        else:
+            cleaned = ""
+
+        return {"equation": cleaned}
     except Exception as e:
         return {"error": str(e)}
+    
 
 # --- ENDPOINT 2: SOLVE (Calculator + AI Logic) ---
 @app.post("/api/calculate")
@@ -140,36 +151,18 @@ async def get_history():
 # 5. CHAT WITH AI TUTOR (New!)
 @app.post("/api/chat")
 async def chat_with_tutor(request: ChatRequest):
-    try:
-        model = genai.GenerativeModel('models/gemini-2.5-flash')
-        
-        # Construct the "System Prompt" to give the AI context
-        # We tell it: "You are a tutor. Here is the problem the student is looking at..."
-        system_instruction = f"""
-        You are a helpful math tutor. The student is asking questions about this specific problem:
-        
-        CONTEXT:
-        {request.context}
-        
-        RULES:
-        1. Answer the student's question clearly.
-        2. Use the Context above to be specific.
-        3. Be concise (max 2-3 sentences unless asked for more).
-        4. Use LaTeX for math equations (wrapped in single $).
-        """
-        
-        # Build the chat history for Gemini
-        chat = model.start_chat(history=request.history)
-        
-        # Send the message with the system instruction prepended (soft-prompting)
-        full_prompt = f"{system_instruction}\n\nStudent Question: {request.message}"
-        
-        response = chat.send_message(full_prompt)
-        
-        return {"reply": response.text.replace("$$", "$")} # Clean LaTeX
-        
-    except Exception as e:
-        return {"error": str(e)}
+    completion = groq_client.chat.completions.create(
+        model="llama3-8b-8192",
+        messages=[
+            {"role": "system", "content": "You are a helpful math tutor."},
+            *request.history,
+            {"role": "user", "content": request.message}
+        ],
+        temperature=0.6
+    )
+
+    return {"reply": completion.choices[0].message.content}
+
     
 # 6. UPDATE HISTORY (Append Chat Messages)
 class ChatUpdate(BaseModel):
@@ -214,18 +207,58 @@ async def get_history_item(id: str):
     
      
 # --- HELPER FUNCTIONS ---
+ocr_reader = easyocr.Reader(['en'], gpu=False)
 
 def image_to_full_text(image_path):
-    """Extracts ALL text for context (Word problems, Signals, etc.)"""
-    model = genai.GenerativeModel('models/gemini-2.5-flash')
-    img = Image.open(image_path)
-    prompt = """
-    Extract the full math problem from this image.
-    Include the main equation and any context (like "Find the impulse response").
-    Return plain text.
     """
-    response = model.generate_content([prompt, img])
-    return response.text.strip()
+    Extracts ALL text from image using EasyOCR.
+    Works for equations + word problems.
+    No AI, no quota, fully free.
+    """
+    # Read image
+    image = cv2.imread(image_path)
+    if image is None:
+        return ""
+
+    # Convert to grayscale
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+    # Slight thresholding improves math OCR
+    gray = cv2.adaptiveThreshold(
+        gray, 255,
+        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY,
+        11, 2
+    )
+
+    # OCR
+    results = ocr_reader.readtext(gray, detail=0)
+
+    # Join lines into one problem statement
+    extracted_text = " ".join(results)
+
+    return extracted_text.strip()
+
+def clean_ocr_text_with_ai(raw_text):
+    completion = groq_client.chat.completions.create(
+        model="llama3-8b-8192",
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "You clean OCR math text.\n"
+                    "Return only the cleaned math problem.\n"
+                    "Remove noise. Preserve meaning."
+                )
+            },
+            {
+                "role": "user",
+                "content": raw_text
+            }
+        ],
+        temperature=0.0
+    )
+    return completion.choices[0].message.content.strip()
 
 def sanitize_for_sympy(equation):
     # Basic cleanup for simple algebra
@@ -248,61 +281,43 @@ def solve_with_sympy(equation_str):
         return None # Skip expressions for now, let AI handle them
 
 def solve_final_answer_with_ai(problem_text):
-    model = genai.GenerativeModel('models/gemini-2.5-flash')
-    
-    # Corrected Prompt
-    prompt = f"""
-    Solve this math problem: "{problem_text}"
-    
-    I need ONLY the final answer to display in a result card.
-    
-    RULES:
-    1. Return ONLY the math result in LaTeX.
-    2. Do NOT use dollar signs ($).
-    3. If there are multiple parts (e.g., H(z) AND h[n]), separate them with a double backslash (\\\\).
-       Example Output: H(z) = \\frac{{1}}{{1-z^{{-1}}}} \\\\ h[n] = u[n]
-    """
-    
-    response = model.generate_content(prompt)
-    
-    # Cleanup
-    clean = response.text.replace("```latex", "").replace("```", "").replace("$$", "").replace("$", "")
-    return clean.strip()
+    completion = groq_client.chat.completions.create(
+        model="llama3-8b-8192",
+        messages=[
+            {
+                "role": "system",
+                "content": "You are a math solver. Return ONLY the final answer in LaTeX. No explanations."
+            },
+            {
+                "role": "user",
+                "content": problem_text
+            }
+        ],
+        temperature=0.2
+    )
+
+    return completion.choices[0].message.content.strip()
 
 def generate_explanation(equation, solution):
-    model = genai.GenerativeModel('models/gemini-2.5-flash')
-    
-    prompt = f"""
-    You are a math tutor. Problem: "{equation}". 
-    
-    Explain the solution step-by-step.
-    
-    STRICT FORMATTING RULES:
-    1. Do NOT use bullet points (no *, no -). Write in full paragraphs.
-    2. Use **bold** for Step titles (e.g., **Step 1:**).
-    3. Start every new step on a new line.
-    4. Use LaTeX for math, wrapped in single dollar signs ($).
-    5. Do NOT use Markdown Headers (###).
-    6. Do NOT add extra asterisks on their own lines.
-    """
-    
-    response = model.generate_content(prompt)
-    
-    text = response.text
-    
-    # --- ROBUST CLEANUP ---
-    # 1. Fix LaTeX double dollars
-    text = text.replace("$$", "$")
-    
-    # 2. Remove Markdown Headers
-    text = text.replace("### ", "").replace("## ", "").replace("# ", "")
-    
-    # 3. Remove stray bullet points/asterisks that cause weird indentation
-    text = text.replace("\n* ", "\n").replace("\n- ", "\n")
-    text = text.replace("\n * ", "\n") # Indented bullets
-    
-    # 4. Remove the specific "lone asterisk" artifact you saw
-    text = text.replace("\n*\n", "\n")
-    
-    return text.strip()
-    return text
+    completion = groq_client.chat.completions.create(
+        model="llama3-8b-8192",
+        messages=[
+            {
+                "role": "system",
+                "content": (
+                    "You are a math tutor. Explain step by step.\n"
+                    "Rules:\n"
+                    "1. Use paragraphs, no bullet points\n"
+                    "2. Use **Step X:** format\n"
+                    "3. Use LaTeX with single $"
+                )
+            },
+            {
+                "role": "user",
+                "content": f"Problem: {equation}\nSolution: {solution}"
+            }
+        ],
+        temperature=0.4
+    )
+
+    return completion.choices[0].message.content.strip()
