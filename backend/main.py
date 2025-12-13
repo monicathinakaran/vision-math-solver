@@ -188,7 +188,31 @@ async def update_history_chat(id: str, update: ChatUpdate):
         return {"message": "Chat updated"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))   
- 
+# 7. CLEAR CHAT HISTORY
+@app.delete("/api/history/{id}/chat")
+async def clear_chat_history(id: str):
+    try:
+        result = await history_collection.update_one(
+            {"_id": ObjectId(id)},
+            {"$set": {"chat_history": []}} # Empty the list
+        )
+        return {"message": "Chat cleared"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+# 8. GET SINGLE HISTORY ITEM (For Persistence)
+@app.get("/api/history/{id}")
+async def get_history_item(id: str):
+    try:
+        doc = await history_collection.find_one({"_id": ObjectId(id)})
+        if doc:
+            doc["_id"] = str(doc["_id"])
+            return doc
+        raise HTTPException(status_code=404, detail="Item not found")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
+     
 # --- HELPER FUNCTIONS ---
 
 def image_to_full_text(image_path):
