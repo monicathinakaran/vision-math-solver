@@ -10,3 +10,4 @@ certifi
 easyocr
 opencv-python
 numpy
+groq
