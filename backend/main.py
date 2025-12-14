@@ -284,7 +284,7 @@ def solve_math_problem_with_groq(problem_text):
 
     try:
         completion = groq_client.chat.completions.create(
-            model="llama-3.3-70b-versatile", # Much smarter than 8b
+            model="llama-3.1-8b-instant", # Much smarter than 8b
             messages=[
                 {"role": "system", "content": "You are a JSON-speaking math machine."},
                 {"role": "user", "content": prompt}
