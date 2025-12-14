@@ -74,7 +74,13 @@ async def extract_from_image(file: UploadFile = File(...)):
         # Use Flash for fast OCR
         model = genai.GenerativeModel('models/gemini-2.5-flash')
         img = Image.open(file_path)
-        prompt = "Extract all text and math from this image exactly as it appears. Return ONLY the text, no conversational filler."
+        prompt = (
+    "Extract the math problem from this image. "
+    "Rules: "
+    "1. Do NOT use LaTeX delimiters like '$' or '\\(' or '\\['. "
+    "2. Just write the math naturally (e.g. '2x + 5 = 10'). "
+    "3. Preserve the exact text of word problems."
+)
         response = model.generate_content([prompt, img])
         return {"equation": response.text.strip()}
     except Exception as e:
@@ -164,11 +170,16 @@ async def chat_with_tutor(request: ChatRequest):
 async def save_history(item: HistoryItem):
     try:
         item.timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-        await history_collection.insert_one(item.dict())
-        return {"message": "Saved"}
+        result = await history_collection.insert_one(item.dict())
+        
+        # FIX: Return the ID immediately!
+        return {
+            "message": "Saved", 
+            "id": str(result.inserted_id)
+        }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-
+    
 @app.get("/api/history")
 async def get_history():
     try:
