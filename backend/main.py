@@ -2,70 +2,67 @@ from fastapi import FastAPI, UploadFile, File, HTTPException
 from pydantic import BaseModel
 import shutil
 import os
+import json
 from PIL import Image
-from sympy import sympify, solve, Symbol, Eq, parse_expr, latex
-from sympy.parsing.sympy_parser import standard_transformations, implicit_multiplication_application
-from groq import Groq
-from pathlib import Path # <--- Import Path
-import certifi
-from bson import ObjectId
-import easyocr
-import cv2
-import numpy as np
-
 # --- DB IMPORTS ---
 from motor.motor_asyncio import AsyncIOMotorClient
+import certifi
 from datetime import datetime
-from dotenv import load_dotenv # Make sure you have python-dotenv installed
-
-# 1. Explicitly find the path to the .env file in the current folder
-env_path = Path(__file__).parent / ".env"
-
-# 2. Load that specific file
-load_dotenv(dotenv_path=env_path)
-
-# 3. Now get the key
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-MONGO_URL = os.getenv("MONGO_URL")
-groq_client = Groq(api_key=os.getenv("GROQ_API_KEY"))
-
-if not GROQ_API_KEY:
-    raise ValueError(f"No API key found. Please ensure '{env_path}' exists and contains GROQ_API_KEY.")
-
+from dotenv import load_dotenv 
 import google.generativeai as genai
-genai.configure(api_key=GROQ_API_KEY)
+from groq import Groq  # <-- NEW IMPORT
+from sympy import sympify, solve, Symbol, Eq, parse_expr, latex
+from sympy.parsing.sympy_parser import standard_transformations, implicit_multiplication_application
 
-genai.configure(api_key=GROQ_API_KEY)
+# Load Env
+load_dotenv()
+
+# --- CONFIGURATION ---
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY") # Get Groq Key
+MONGO_URL = os.getenv("MONGO_URL")
+
+# 1. Setup Gemini (Eyes)
+genai.configure(api_key=GOOGLE_API_KEY)
+
+# 2. Setup Groq (Brain)
+groq_client = Groq(api_key=GROQ_API_KEY)
+
 app = FastAPI()
 
 # --- DATABASE SETUP ---
 client = AsyncIOMotorClient(MONGO_URL, tlsCAFile=certifi.where())
-db = client.math_solver_db # This creates a DB named 'math_solver_db'
-history_collection = db.history # This creates a collection named 'history
+db = client.math_solver_db 
+history_collection = db.history 
 
+# --- DATA MODELS ---
 class MathRequest(BaseModel):
     equation: str
 
 class HistoryItem(BaseModel):
     equation: str
-    solution: str = None     # Changed to optional (None) because "Hint" mode won't have a solution yet
-    explanation: str = None  # Changed to optional
+    solution: str = None
+    explanation: str = None
     timestamp: str = None
-    chat_history: list = []  # <--- NEW: Stores the chat logs
+    chat_history: list = []
 
 class ChatRequest(BaseModel):
-    context: str  # The original math problem + solution
-    history: list # List of previous Q&A e.g. [{"role": "user", "parts": ["hi"]}]
-    message: str  # The new question
+    context: str
+    history: list 
+    message: str 
 
+class ChatUpdate(BaseModel):
+    chat_history: list
+
+from bson import ObjectId
 
 # --- ENDPOINTS ---
 
 @app.get("/")
 def read_root():
-    return {"status": "Server is running", "db_status": "Connected to MongoDB"}
+    return {"status": "Hybrid Server Running (Gemini Vision + Groq Brain)"}
 
-# --- ENDPOINT 1: EXTRACT TEXT (OCR) ---
+# 1. VISION: GEMINI (Extract Text Only)
 @app.post("/api/extract")
 async def extract_from_image(file: UploadFile = File(...)):
     os.makedirs("uploads", exist_ok=True)
@@ -74,126 +71,107 @@ async def extract_from_image(file: UploadFile = File(...)):
         shutil.copyfileobj(file.file, buffer)
     
     try:
-        # Changed: Now extracts FULL text, not just equation
-        raw_text = image_to_full_text(file_path)
-
-        if raw_text:
-            cleaned = clean_ocr_text_with_ai(raw_text)
-        else:
-            cleaned = ""
-
-        return {"equation": cleaned}
+        # Use Flash for fast OCR
+        model = genai.GenerativeModel('models/gemini-2.5-flash')
+        img = Image.open(file_path)
+        prompt = "Extract all text and math from this image exactly as it appears. Return ONLY the text, no conversational filler."
+        response = model.generate_content([prompt, img])
+        return {"equation": response.text.strip()}
     except Exception as e:
-        return {"error": str(e)}
-    
+        return {"error": f"OCR Error: {str(e)}"}
 
-# --- ENDPOINT 2: SOLVE (Calculator + AI Logic) ---
+# 2. SOLVER: GROQ (Llama 3 - 70b)
 @app.post("/api/calculate")
 async def calculate_solution(request: MathRequest):
-    problem_text = request.equation
+    prompt = f"""
+    Act as a math tutor. Solve this problem: "{request.equation}"
     
-    solution_result = None
+    Return a strictly valid JSON response with exactly these keys:
+    {{
+      "solution": "The final concise answer in LaTeX (no dollar signs)",
+      "explanation": "A step-by-step explanation in LaTeX (use single dollar signs for math)"
+    }}
     
-    # 1. Try SymPy first (Good for simple x + y = z)
+    Do not add markdown formatting like ```json. Just the raw JSON string.
+    """
+    
     try:
-        cleaned_equation = sanitize_for_sympy(problem_text)
-        solution_result = solve_with_sympy(cleaned_equation)
-    except Exception:
-        solution_result = None 
-
-    # 2. If SymPy failed, use AI to get the FINAL ANSWER
-    if solution_result is None or solution_result == "[]":
-        try:
-            # New function to get just the result in LaTeX
-            solution_result = solve_final_answer_with_ai(problem_text)
-        except Exception as e:
-            solution_result = r"\text{Error generating solution}"
-
-    # 3. Generate Full Explanation
-    explanation = "Explanation unavailable."
-    try:
-        explanation = generate_explanation(problem_text, solution_result)
-    except Exception as e:
-        explanation = f"Explanation Error: {e}"
+        # Use Llama-3.3-70b (Very smart, very fast)
+        completion = groq_client.chat.completions.create(
+            messages=[{"role": "user", "content": prompt}],
+            model="llama-3.3-70b-versatile",
+            temperature=0,
+            response_format={"type": "json_object"} # Force JSON mode
+        )
         
-    return {
-        "solution": str(solution_result),
-        "explanation": explanation
-    }
+        text = completion.choices[0].message.content
+        data = json.loads(text)
+        
+        return {
+            "solution": data.get("solution", "Error"),
+            "explanation": data.get("explanation", "Explanation unavailable")
+        }
+        
+    except Exception as e:
+        return {
+            "solution": r"\text{Error}",
+            "explanation": f"Solver Error: {str(e)}"
+        }
 
-# 3. SAVE HISTORY (New!)
+# 3. CHAT: GROQ (Llama 3 - 8b for speed or 70b for smarts)
+@app.post("/api/chat")
+async def chat_with_tutor(request: ChatRequest):
+    try:
+        # Convert Gemini history format to Groq format if needed
+        # (Gemini uses 'parts', Groq uses 'content')
+        groq_history = []
+        for msg in request.history:
+            role = "assistant" if msg['role'] == "model" else "user"
+            content = msg.get("parts", [{}])[0].get("text", "") if "parts" in msg else msg.get("text", "")
+            if content:
+                groq_history.append({"role": role, "content": content})
+        
+        # Add System Prompt
+        system_msg = {
+            "role": "system", 
+            "content": f"You are a helpful math tutor. Context: {request.context}. Use LaTeX for math."
+        }
+        
+        messages = [system_msg] + groq_history + [{"role": "user", "content": request.message}]
+        
+        completion = groq_client.chat.completions.create(
+            messages=messages,
+            model="llama-3.3-70b-versatile",
+        )
+        
+        reply = completion.choices[0].message.content
+        return {"reply": reply.replace("$$", "$")} 
+        
+    except Exception as e:
+        return {"error": str(e)}
+
+# 4. HISTORY ENDPOINTS (Unchanged)
 @app.post("/api/history")
 async def save_history(item: HistoryItem):
     try:
-        # Add current time
         item.timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-        # Insert into MongoDB
         await history_collection.insert_one(item.dict())
-        return {"message": "Saved to History"}
+        return {"message": "Saved"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-# 4. GET HISTORY (New!)
 @app.get("/api/history")
 async def get_history():
     try:
-        # Fetch latest 20 items, sorted by newest
         history_list = []
         cursor = history_collection.find({}).sort("_id", -1).limit(20)
         async for document in cursor:
-            # Convert ObjectId to string for JSON compatibility
             document["_id"] = str(document["_id"])
             history_list.append(document)
         return history_list
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    
-# 5. CHAT WITH AI TUTOR (New!)
-@app.post("/api/chat")
-async def chat_with_tutor(request: ChatRequest):
-    completion = groq_client.chat.completions.create(
-        model="llama3-8b-8192",
-        messages=[
-            {"role": "system", "content": "You are a helpful math tutor."},
-            *request.history,
-            {"role": "user", "content": request.message}
-        ],
-        temperature=0.6
-    )
 
-    return {"reply": completion.choices[0].message.content}
-
-    
-# 6. UPDATE HISTORY (Append Chat Messages)
-class ChatUpdate(BaseModel):
-    chat_history: list
-
-@app.put("/api/history/{id}")
-async def update_history_chat(id: str, update: ChatUpdate):
-    try:
-        # Update the specific document with the new chat history
-        result = await history_collection.update_one(
-            {"_id": ObjectId(id)},
-            {"$set": {"chat_history": update.chat_history}}
-        )
-        if result.matched_count == 0:
-            raise HTTPException(status_code=404, detail="History item not found")
-        return {"message": "Chat updated"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))   
-# 7. CLEAR CHAT HISTORY
-@app.delete("/api/history/{id}/chat")
-async def clear_chat_history(id: str):
-    try:
-        result = await history_collection.update_one(
-            {"_id": ObjectId(id)},
-            {"$set": {"chat_history": []}} # Empty the list
-        )
-        return {"message": "Chat cleared"}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-# 8. GET SINGLE HISTORY ITEM (For Persistence)
 @app.get("/api/history/{id}")
 async def get_history_item(id: str):
     try:
@@ -204,120 +182,181 @@ async def get_history_item(id: str):
         raise HTTPException(status_code=404, detail="Item not found")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-    
+
+@app.put("/api/history/{id}")
+async def update_history_chat(id: str, update: ChatUpdate):
+    try:
+        await history_collection.update_one(
+            {"_id": ObjectId(id)},
+            {"$set": {"chat_history": update.chat_history}}
+        )
+        return {"message": "Chat updated"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.delete("/api/history/{id}/chat")
+async def clear_chat_history(id: str):
+    try:
+        await history_collection.update_one(
+            {"_id": ObjectId(id)},
+            {"$set": {"chat_history": []}}
+        )
+        return {"message": "Chat cleared"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
      
 # --- HELPER FUNCTIONS ---
-ocr_reader = easyocr.Reader(['en'], gpu=False)
+# Ensure you have imports: 
+# from sympy import sympify, solve, Symbol, Eq, parse_expr, latex
+# from sympy.parsing.sympy_parser import standard_transformations, implicit_multiplication_application
 
 def image_to_full_text(image_path):
     """
-    Extracts ALL text from image using EasyOCR.
-    Works for equations + word problems.
-    No AI, no quota, fully free.
+    OCR using Gemini 2.5 Flash.
+    Optimized to preserve mathematical structure (LaTeX).
     """
-    # Read image
-    image = cv2.imread(image_path)
-    if image is None:
+    try:
+        model = genai.GenerativeModel("models/gemini-2.5-flash")
+        img = Image.open(image_path)
+
+        prompt = (
+            "You are a mathematical OCR engine. Extract all text and math from this image.\n"
+            "Rules:\n"
+            "1. Output valid LaTeX for all mathematical expressions (e.g., use \\frac{a}{b} not a/b).\n"
+            "2. Preserve the exact text of word problems.\n"
+            "3. Do not solve the problem. Just extract the text."
+        )
+
+        response = model.generate_content([prompt, img])
+
+        if not response or not response.text:
+            return ""
+
+        return response.text.strip()
+
+    except Exception as e:
+        print(f"OCR ERROR: {e}")
         return ""
 
-    # Convert to grayscale
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
-    # Slight thresholding improves math OCR
-    gray = cv2.adaptiveThreshold(
-        gray, 255,
-        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-        cv2.THRESH_BINARY,
-        11, 2
-    )
+def solve_math_problem_with_groq(problem_text):
+    """
+    Solves the problem AND generates explanation in ONE call.
+    Uses Llama-3.3-70b (Smartest Model) on Groq.
+    """
+    prompt = f"""
+    Act as an expert math tutor. Solve this problem:
+    
+    PROBLEM:
+    "{problem_text}"
 
-    # OCR
-    results = ocr_reader.readtext(gray, detail=0)
+    INSTRUCTIONS:
+    1. Solve the problem step-by-step.
+    2. Provide the final answer in LaTeX format.
+    3. Return the result in strictly valid JSON format.
 
-    # Join lines into one problem statement
-    extracted_text = " ".join(results)
+    JSON STRUCTURE:
+    {{
+      "solution": "Final Answer in LaTeX (e.g. x = 5)",
+      "explanation": "Step-by-step explanation. Use **Step 1:** format. Use LaTeX for math."
+    }}
+    """
 
-    return extracted_text.strip()
+    try:
+        completion = groq_client.chat.completions.create(
+            model="llama-3.3-70b-versatile", # Much smarter than 8b
+            messages=[
+                {"role": "system", "content": "You are a JSON-speaking math machine."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.1, # Low temp for precision
+            response_format={"type": "json_object"} # Force valid JSON
+        )
+        
+        # Parse the JSON response
+        import json
+        content = completion.choices[0].message.content
+        data = json.loads(content)
+        
+        return data.get("solution"), data.get("explanation")
 
-def clean_ocr_text_with_ai(raw_text):
-    completion = groq_client.chat.completions.create(
-        model="llama3-8b-8192",
-        messages=[
-            {
-                "role": "system",
-                "content": (
-                    "You clean OCR math text.\n"
-                    "Return only the cleaned math problem.\n"
-                    "Remove noise. Preserve meaning."
-                )
-            },
-            {
-                "role": "user",
-                "content": raw_text
-            }
-        ],
-        temperature=0.0
-    )
-    return completion.choices[0].message.content.strip()
+    except Exception as e:
+        print(f"Groq Error: {e}")
+        # Fallback if JSON fails
+        return r"\text{Error}", "Could not solve this problem."
 
+
+# --- OPTIONAL: SYMPY (Keep this only if you really want a non-AI check) ---
 def sanitize_for_sympy(equation):
-    # Basic cleanup for simple algebra
     equation = equation.replace("$", "").replace(r"\(", "").replace(r"\)", "")
     equation = equation.replace("^", "**").replace(r"\times", "*")
     return equation
 
 def solve_with_sympy(equation_str):
-    # (Same logic as before - good for Algebra I/II)
-    x = Symbol('x')
-    transformations = (standard_transformations + (implicit_multiplication_application,))
-    if "=" in equation_str:
+    """
+    Tries to solve simple algebra using Python's Symbolic Math library.
+    Returns None if it gets too complicated (so AI takes over).
+    """
+    try:
+        # 1. Clean up string
+        equation_str = sanitize_for_sympy(equation_str)
+        
+        # 2. Check for '='
+        if "=" not in equation_str: 
+            return None # Not an equation we can solve directly
+            
         parts = equation_str.split("=")
+        if len(parts) != 2: return None
+        
+        # 3. Setup SymPy
+        x = Symbol("x")
+        transformations = standard_transformations + (implicit_multiplication_application,)
+        
         lhs = parse_expr(parts[0], transformations=transformations)
         rhs = parse_expr(parts[1], transformations=transformations)
-        eqn = Eq(lhs, rhs)
-        result = solve(eqn, x)
+        
+        # 4. Solve
+        eq = Eq(lhs, rhs)
+        result = solve(eq, x)
+        
+        if not result: return None
+        
         return latex(result)
-    else:
-        return None # Skip expressions for now, let AI handle them
-
-def solve_final_answer_with_ai(problem_text):
-    completion = groq_client.chat.completions.create(
-        model="llama3-8b-8192",
-        messages=[
-            {
-                "role": "system",
-                "content": "You are a math solver. Return ONLY the final answer in LaTeX. No explanations."
-            },
-            {
-                "role": "user",
-                "content": problem_text
-            }
-        ],
-        temperature=0.2
-    )
-
-    return completion.choices[0].message.content.strip()
+        
+    except Exception:
+        return None
 
 def generate_explanation(equation, solution):
-    completion = groq_client.chat.completions.create(
-        model="llama3-8b-8192",
-        messages=[
-            {
-                "role": "system",
-                "content": (
-                    "You are a math tutor. Explain step by step.\n"
-                    "Rules:\n"
-                    "1. Use paragraphs, no bullet points\n"
-                    "2. Use **Step X:** format\n"
-                    "3. Use LaTeX with single $"
-                )
-            },
-            {
-                "role": "user",
-                "content": f"Problem: {equation}\nSolution: {solution}"
-            }
-        ],
-        temperature=0.4
-    )
+    """
+    Generates an explanation for a KNOWN solution (found by SymPy).
+    """
+    prompt = f"""
+    You are a math tutor. I have already solved this problem.
+    
+    PROBLEM: {equation}
+    KNOWN ANSWER: {solution}
+    
+    TASK:
+    Explain how to get from the problem to the answer step-by-step.
+    
+    RULES:
+    1. Use **Step 1:**, **Step 2:** format.
+    2. Use LaTeX for all math expressions (wrapped in single $).
+    3. Be concise but clear.
+    """
 
-    return completion.choices[0].message.content.strip()
+    try:
+        completion = groq_client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[
+                {"role": "system", "content": "You are a helpful math tutor."},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0.3, 
+        )
+        
+        return completion.choices[0].message.content.strip()
+
+    except Exception as e:
+        print(f"Explanation Error: {e}")
+        return "Explanation unavailable."

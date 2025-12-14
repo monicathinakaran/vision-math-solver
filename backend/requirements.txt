@@ -7,7 +7,4 @@ python-dotenv
 pillow
 motor  
 certifi
-easyocr
-opencv-python
-numpy
 groq
