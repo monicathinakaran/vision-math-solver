@@ -133,9 +133,18 @@ async def chat_with_tutor(request: ChatRequest):
         
         # Add System Prompt
         system_msg = {
-            "role": "system", 
-            "content": f"You are a helpful math tutor. Context: {request.context}. Use LaTeX for math."
-        }
+    "role": "system", 
+    "content": (
+        f"You are a socractic math tutor. Context: {request.context}. "
+        "Your Goal: Guide the user to the answer, do NOT give it to them.\n"
+        "RULES:\n"
+        "1. Never solve the problem completely.\n"
+        "2. Provide only one logical step or formula at a time.\n"
+        "3. Ask a guiding question to check their understanding.\n"
+        "4. Use LaTeX format (wrap in $) for all math expressions.\n"
+        "5. Keep responses concise (under 3 sentences)."
+    )
+}
         
         messages = [system_msg] + groq_history + [{"role": "user", "content": request.message}]
         
