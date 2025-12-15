@@ -104,10 +104,11 @@ class _ChatScreenState extends State<ChatScreen> {
         body: jsonEncode({
           "context": widget.problemContext,
           "history": _messages.map((m) => {"role": m['role'] == "user" ? "user" : "model", "parts": [{"text": m['text']}]}).toList(),
-          "message": text
+          "message": text,
+          "mode": widget.isHintMode ? "hint" : "tutor" // <--- PASS THE MODE HERE
         }),
       );
-
+      
       final data = jsonDecode(response.body);
       final reply = data['reply'] ?? "Error connecting to AI.";
 
