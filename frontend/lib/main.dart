@@ -4,6 +4,19 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'package:image_picker/image_picker.dart';
 import 'package:flutter_math_fork/flutter_math.dart';
+import 'chat_screen.dart'; // Make sure you import your ChatScreen file
+
+// --- CONFIGURATION ---
+class Config {
+  // OPTION A: Android Emulator
+  static const String baseUrl = "http://10.0.2.2:8000"; 
+  
+  // OPTION B: Physical Device (Use your PC's IP, e.g., 192.168.1.5)
+  // static const String baseUrl = "http://192.168.1.X:8000"; 
+
+  // OPTION C: Cloud (Render/AWS)
+  // static const String baseUrl = "https://your-app.onrender.com"; 
+}
 
 void main() {
   runApp(const MyApp());
@@ -20,28 +33,18 @@ class MyApp extends StatelessWidget {
       theme: ThemeData(
         useMaterial3: true,
         fontFamily: 'Roboto',
-        
-        // --- COLOR PALETTE (From Xolver Logo) ---
         colorScheme: const ColorScheme(
           brightness: Brightness.light,
-          
-          // 1. PRIMARY BLUE
           primary: Color(0xFF5C87FF), 
           onPrimary: Colors.white,
           primaryContainer: Color(0xFFE0E7FF),
           onPrimaryContainer: Color(0xFF00215E),
-          
-          // 2. SECONDARY PINK
           secondary: Color(0xFFFF5EB3), 
           onSecondary: Colors.white,
           secondaryContainer: Color(0xFFFFD6ED),
           onSecondaryContainer: Color(0xFF3E001D),
-          
-          // 3. TERTIARY YELLOW
           tertiary: Color(0xFFFFCA28), 
           onTertiary: Colors.black,
-          
-          // 4. BACKGROUNDS
           surface: Colors.white,
           onSurface: Color(0xFF1C1B1F),
           error: Color(0xFFBA1A1A),
@@ -72,10 +75,10 @@ class _MyHomePageState extends State<MyHomePage> {
   String? _solution;
   String? _explanation;
   String? _errorMessage;
+  String? _currentHistoryId; // Storing ID for Chat
 
   // --- HELPER: CLEAN MATH STRING ---
   String cleanMath(String input) {
-    // Removes $, \[, \] so the renderer doesn't crash
     return input.replaceAll(r'$', '').replaceAll(r'\[', '').replaceAll(r'\]', '');
   }
 
@@ -88,6 +91,7 @@ class _MyHomePageState extends State<MyHomePage> {
         _solution = null;
         _explanation = null;
         _errorMessage = null;
+        _currentHistoryId = null;
         _showEditor = false;
       });
       _processImage(pickedFile);
@@ -96,11 +100,9 @@ class _MyHomePageState extends State<MyHomePage> {
 
   Future<void> _processImage(XFile image) async {
     setState(() { _isUploading = true; _errorMessage = null; });
-    // Use 10.0.2.2 for Android Emulator, or your PC's Local IP for real device
-    const String apiUrl = "http://10.0.2.2:8000/api/extract";
     
     try {
-      var request = http.MultipartRequest("POST", Uri.parse(apiUrl));
+      var request = http.MultipartRequest("POST", Uri.parse("${Config.baseUrl}/api/extract"));
       request.files.add(await http.MultipartFile.fromPath('file', image.path));
 
       var streamedResponse = await request.send();
@@ -131,11 +133,11 @@ class _MyHomePageState extends State<MyHomePage> {
 
   Future<void> _solveEquation() async {
     setState(() { _isSolving = true; _errorMessage = null; });
-    const String apiUrl = "http://10.0.2.2:8000/api/calculate";
     
     try {
+      // 1. Calculate Solution
       final response = await http.post(
-        Uri.parse(apiUrl),
+        Uri.parse("${Config.baseUrl}/api/calculate"),
         headers: {"Content-Type": "application/json"},
         body: jsonEncode({ "equation": _equationController.text }),
       );
@@ -148,19 +150,68 @@ class _MyHomePageState extends State<MyHomePage> {
              _errorMessage = "Solver Error: ${data['error']}"; 
              _isSolving = false; 
            });
-        } else {
-           setState(() {
-             _solution = data['solution'];
-             _explanation = data['explanation'];
-             _isSolving = false;
-           });
+           return;
         }
+
+        final solution = data['solution'];
+        final explanation = data['explanation'];
+
+        // 2. Save to History (To get ID)
+        final historyResponse = await http.post(
+           Uri.parse("${Config.baseUrl}/api/history"),
+           headers: {"Content-Type": "application/json"},
+           body: jsonEncode({
+             "equation": _equationController.text,
+             "solution": solution,
+             "explanation": explanation
+           })
+        );
+
+        String? newHistoryId;
+        if (historyResponse.statusCode == 200) {
+           final historyData = jsonDecode(historyResponse.body);
+           newHistoryId = historyData['id']; 
+        }
+
+        setState(() {
+          _solution = solution;
+          _explanation = explanation;
+          _currentHistoryId = newHistoryId;
+          _isSolving = false;
+        });
+
       } else {
         setState(() { _errorMessage = "Server Error: ${response.statusCode}"; _isSolving = false; });
       }
     } catch (e) {
       setState(() { _errorMessage = "Connection Error: $e"; _isSolving = false; });
     }
+  }
+
+  void _openChat({bool isHint = false}) {
+    if (_currentHistoryId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Error: No History ID found. Try solving again.")));
+      return;
+    }
+
+    // If Hint Mode: Send a preset prompt
+    // If Tutor Mode: Send null (so the user types their own question)
+    String? initialMsg = isHint 
+        ? "I am stuck. Please give me a small hint for the next step. Do not solve it completely." 
+        : null;
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => ChatScreen(
+          baseUrl: Config.baseUrl, // Pass config
+          problemContext: "Problem: ${_equationController.text}\nSolution: $_solution",
+          historyId: _currentHistoryId!,
+          initialMessage: initialMsg,
+          isHintMode: isHint, // Pass mode
+        ),
+      ),
+    );
   }
 
   @override
@@ -173,28 +224,23 @@ class _MyHomePageState extends State<MyHomePage> {
       
       body: CustomScrollView(
         slivers: [
-          // --- HEADER (White & Tall) ---
+          // --- HEADER ---
           SliverAppBar(
             backgroundColor: Colors.white, 
             foregroundColor: Colors.black87,
             centerTitle: true,
-            
-            // Increase height to fit the logo nicely
-            toolbarHeight: 200, 
-            
-            title: Image.asset(
-              'assets/Logo1.png', 
-              height: 200, 
-              fit: BoxFit.contain,
-              errorBuilder: (context, error, stackTrace) {
-                 return Text("Xolver", style: TextStyle(color: brandColor, fontWeight: FontWeight.bold, fontSize: 28));
-              },
+            toolbarHeight: 120, // Adjusted height
+            title: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                 // Replace with Image.asset('assets/Logo1.png') if you have it
+                 Text("Xolver", style: TextStyle(color: brandColor, fontWeight: FontWeight.bold, fontSize: 28)),
+                 const SizedBox(height: 5),
+                 Text("Snap & Solve", style: TextStyle(color: Colors.grey[600], fontSize: 14)),
+              ],
             ),
-            
-            expandedHeight: 0, 
             pinned: true,
             elevation: 1,
-            shadowColor: Colors.grey.withOpacity(0.1),
           ),
 
           // --- MAIN CONTENT ---
@@ -212,15 +258,7 @@ class _MyHomePageState extends State<MyHomePage> {
                       margin: const EdgeInsets.only(bottom: 20, top: 10),
                       decoration: BoxDecoration(
                         borderRadius: BorderRadius.circular(20),
-                        color: Colors.white, 
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.grey.withOpacity(0.15),
-                            spreadRadius: 2,
-                            blurRadius: 15,
-                            offset: const Offset(0, 8),
-                          ),
-                        ],
+                        boxShadow: [BoxShadow(color: Colors.grey.withOpacity(0.15), blurRadius: 15, offset: const Offset(0, 8))],
                       ),
                       child: ClipRRect(
                         borderRadius: BorderRadius.circular(20),
@@ -228,49 +266,32 @@ class _MyHomePageState extends State<MyHomePage> {
                       ),
                     ),
 
-                  // WELCOME SCREEN
+                  // WELCOME PLACEHOLDER
                   if (_image == null)
                     Padding(
-                      padding: const EdgeInsets.only(top: 60.0),
-                      child: Column(
-                        children: [
-                          Icon(Icons.auto_awesome, size: 80, color: brandColor.withOpacity(0.5)),
-                          const SizedBox(height: 30),
-                          Text("Snap & Solve", style: TextStyle(fontSize: 22, fontWeight: FontWeight.bold, color: Colors.blueGrey[800])),
-                          const SizedBox(height: 10),
-                          const Text("Your AI Math Companion", style: TextStyle(color: Colors.grey, fontSize: 16)),
-                        ],
+                      padding: const EdgeInsets.only(top: 40.0, bottom: 40.0),
+                      child: Center(
+                        child: Icon(Icons.add_a_photo_outlined, size: 60, color: Colors.grey[300]),
                       ),
                     ),
 
                   // LOADING
                   if (_isUploading) 
-                     const Padding(padding: EdgeInsets.all(40), child: Center(child: CircularProgressIndicator())),
+                      const Padding(padding: EdgeInsets.all(40), child: Center(child: CircularProgressIndicator())),
 
-                  // EDITOR SECTION
+                  // EDITOR
                   if (_showEditor && !_isUploading) ...[
-                    Row(
-                      children: [
-                        Icon(Icons.edit_note, color: Colors.blueGrey[700]),
-                        const SizedBox(width: 8),
-                        Text("CONFIRM EQUATION", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.blueGrey[700])),
-                      ],
-                    ),
-                    const SizedBox(height: 10),
                     TextField(
                       controller: _equationController,
-                      // --- MULTI-LINE ENABLED ---
-                      maxLines: 8, 
+                      maxLines: 5, 
                       minLines: 1, 
                       keyboardType: TextInputType.multiline,
-                      // --------------------------
-                      style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w500, fontFamily: 'monospace'),
+                      style: const TextStyle(fontSize: 18, fontFamily: 'monospace'),
                       decoration: InputDecoration(
-                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(16), borderSide: BorderSide.none),
+                        labelText: "Edit Equation",
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(16)),
                         filled: true,
                         fillColor: Colors.white,
-                        contentPadding: const EdgeInsets.all(20),
-                        suffixIcon: const Icon(Icons.edit),
                       ),
                     ),
                     const SizedBox(height: 20),
@@ -282,21 +303,17 @@ class _MyHomePageState extends State<MyHomePage> {
                           ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(color: Colors.white, strokeWidth: 2)) 
                           : const Icon(Icons.auto_awesome),
                         label: Text(_isSolving ? "Thinking..." : "SOLVE WITH AI", style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
-                        style: FilledButton.styleFrom(
-                          backgroundColor: brandColor,
-                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                        ),
+                        style: FilledButton.styleFrom(backgroundColor: brandColor),
                       ),
                     ),
                     const SizedBox(height: 30),
                   ],
 
-                  // RESULTS SECTION
+                  // RESULTS
                   if (_solution != null) ...[
                     // Solution Card
                     Card(
                       elevation: 4,
-                      shadowColor: Colors.green.withOpacity(0.3),
                       color: const Color(0xFFE8F5E9), 
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
                       child: Padding(
@@ -305,31 +322,24 @@ class _MyHomePageState extends State<MyHomePage> {
                           children: [
                             const Text("FINAL ANSWER", style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold, color: Colors.green, letterSpacing: 1.5)),
                             const SizedBox(height: 15),
-                            
-                            // --- MULTI-LINE MATH RENDERER ---
                             ...cleanMath(_solution!).split(r'\\').map((line) {
                               if (line.trim().isEmpty) return const SizedBox.shrink();
-                              return Container(
-                                margin: const EdgeInsets.only(bottom: 12.0),
-                                width: double.infinity,
-                                child: SingleChildScrollView(
-                                  scrollDirection: Axis.horizontal,
-                                  child: Math.tex(
-                                    line.trim(), 
-                                    textStyle: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: Colors.black87),
-                                    onErrorFallback: (err) => Text(line, style: const TextStyle(color: Colors.red)),
-                                  ),
+                              return SingleChildScrollView(
+                                scrollDirection: Axis.horizontal,
+                                child: Math.tex(
+                                  line.trim(), 
+                                  textStyle: const TextStyle(fontSize: 28, fontWeight: FontWeight.bold, color: Colors.black87),
+                                  onErrorFallback: (err) => Text(line, style: const TextStyle(color: Colors.red)),
                                 ),
                               );
-                            }).toList(),
-                            // --------------------------------
+                            }),
                           ],
                         ),
                       ),
                     ),
                     const SizedBox(height: 20),
                     
-                    // Explanation Card
+                    // Explanation
                     Container(
                       padding: const EdgeInsets.all(20),
                       decoration: BoxDecoration(
@@ -339,21 +349,48 @@ class _MyHomePageState extends State<MyHomePage> {
                       ),
                       child: MathExplanation(text: _explanation!),
                     ),
-                    const SizedBox(height: 80),
+                    
+                    const SizedBox(height: 25),
+
+                    // --- ACTION BUTTONS (HINT & TUTOR) ---
+                    Row(
+                      children: [
+                        Expanded(
+                          child: ElevatedButton.icon(
+                            onPressed: () => _openChat(isHint: true),
+                            icon: const Icon(Icons.lightbulb, color: Colors.white),
+                            label: const Text("Get Hint", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.orange,
+                              padding: const EdgeInsets.symmetric(vertical: 16),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+                              elevation: 2,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 15),
+                        Expanded(
+                          child: ElevatedButton.icon(
+                            onPressed: () => _openChat(isHint: false),
+                            icon: const Icon(Icons.chat_bubble_outline, color: Colors.white),
+                            label: const Text("Ask Tutor", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold)),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: brandColor,
+                              padding: const EdgeInsets.symmetric(vertical: 16),
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+                              elevation: 2,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 50),
                   ],
 
                   if (_errorMessage != null)
-                    Container(
-                      margin: const EdgeInsets.only(top: 20),
-                      padding: const EdgeInsets.all(15),
-                      decoration: BoxDecoration(color: Colors.red[50], borderRadius: BorderRadius.circular(12)),
-                      child: Row(
-                        children: [
-                          const Icon(Icons.error_outline, color: Colors.red),
-                          const SizedBox(width: 10),
-                          Expanded(child: Text(_errorMessage!, style: TextStyle(color: Colors.red[900]))),
-                        ],
-                      ),
+                    Padding(
+                      padding: const EdgeInsets.only(top: 20),
+                      child: Text(_errorMessage!, style: const TextStyle(color: Colors.red), textAlign: TextAlign.center),
                     ),
                 ],
               ),
@@ -362,14 +399,12 @@ class _MyHomePageState extends State<MyHomePage> {
         ],
       ),
       
-      // --- FAB ---
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _pickImage,
-        label: const Text("SNAP", style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+        label: const Text("SNAP"),
         icon: const Icon(Icons.camera_alt),
         backgroundColor: brandColor,
         foregroundColor: Colors.white,
-        elevation: 4,
       ),
     );
   }
@@ -415,16 +450,16 @@ class MathExplanation extends StatelessWidget {
         // Text Part
         List<String> boldParts = part.split(r'**');
         for (int j = 0; j < boldParts.length; j++) {
-           bool isBold = (j % 2 == 1);
-           spans.add(TextSpan(
-             text: boldParts[j],
-             style: TextStyle(
-               fontSize: 16, 
-               height: 1.5,
-               fontWeight: isBold ? FontWeight.bold : FontWeight.normal,
-               color: isBold ? Theme.of(context).colorScheme.primary : Colors.black87,
-             ),
-           ));
+            bool isBold = (j % 2 == 1);
+            spans.add(TextSpan(
+              text: boldParts[j],
+              style: TextStyle(
+                fontSize: 16, 
+                height: 1.5,
+                fontWeight: isBold ? FontWeight.bold : FontWeight.normal,
+                color: isBold ? Theme.of(context).colorScheme.primary : Colors.black87,
+              ),
+            ));
         }
       }
     }
