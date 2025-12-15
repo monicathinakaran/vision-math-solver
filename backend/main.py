@@ -128,8 +128,7 @@ async def calculate_solution(request: MathRequest):
 @app.post("/api/chat")
 async def chat_with_tutor(request: ChatRequest):
     try:
-        # Convert Gemini history format to Groq format if needed
-        # (Gemini uses 'parts', Groq uses 'content')
+        # Convert Gemini history format to Groq format
         groq_history = []
         for msg in request.history:
             role = "assistant" if msg['role'] == "model" else "user"
@@ -137,20 +136,34 @@ async def chat_with_tutor(request: ChatRequest):
             if content:
                 groq_history.append({"role": role, "content": content})
         
-        # Add System Prompt
-        system_msg = {
-    "role": "system", 
-    "content": (
-        f"You are a socractic math tutor. Context: {request.context}. "
-        "Your Goal: Guide the user to the answer, do NOT give it to them.\n"
-        "RULES:\n"
-        "1. Never solve the problem completely.\n"
-        "2. Provide only one logical step or formula at a time.\n"
-        "3. Ask a guiding question to check their understanding.\n"
-        "4. Use LaTeX format (wrap in $) for all math expressions.\n"
-        "5. Keep responses concise (under 3 sentences)."
-    )
-}
+        # --- SELECT PROMPT BASED ON MODE ---
+        if request.mode == "hint":
+            # Mode A: Socratic Hint Giver (Strict)
+            system_instruction = (
+                f"You are a socractic math tutor. Context: {request.context}. "
+                "Your Goal: Guide the user to the answer, do NOT give it to them.\n"
+                "RULES:\n"
+                "1. Never solve the problem completely.\n"
+                "2. Provide only one logical step or formula at a time.\n"
+                "3. Ask a guiding question to check their understanding.\n"
+                "4. Use LaTeX format (wrap in $) for all math expressions.\n"
+                "5. Keep responses concise (under 3 sentences)."
+            )
+        else:
+            # Mode B: Helpful Tutor (Explains Doubts)
+            system_instruction = (
+                f"You are a helpful math tutor. Context: {request.context}. "
+                "The user already has the solution but needs help understanding it.\n"
+                "Your Goal: Clear their doubts and explain the concepts.\n"
+                "RULES:\n"
+                "1. Answer their specific question clearly and directly.\n"
+                "2. You CAN explain the steps in detail.\n"
+                "3. Use analogies if it helps.\n"
+                "4. Use LaTeX format (wrap in $) for all math expressions.\n"
+                "5. Be encouraging and patient."
+            )
+
+        system_msg = {"role": "system", "content": system_instruction}
         
         messages = [system_msg] + groq_history + [{"role": "user", "content": request.message}]
         
