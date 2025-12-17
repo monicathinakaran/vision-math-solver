@@ -3,6 +3,25 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'HistoryDetailScreen.dart';
 import 'main.dart'; // for Config.baseUrl
+String formatToIST(String isoTime) {
+  try {
+    final utcTime = DateTime.parse(isoTime).toUtc();
+    final istTime = utcTime.add(const Duration(hours: 5, minutes: 30));
+
+    final date =
+        "${istTime.day.toString().padLeft(2, '0')}-"
+        "${istTime.month.toString().padLeft(2, '0')}-"
+        "${istTime.year}";
+
+    final time =
+        "${istTime.hour.toString().padLeft(2, '0')}:"
+        "${istTime.minute.toString().padLeft(2, '0')}";
+
+    return "$date\n$time";
+  } catch (_) {
+    return isoTime;
+  }
+}
 
 class TopicHistoryScreen extends StatefulWidget {
   final String topic;
@@ -78,7 +97,11 @@ class _TopicHistoryScreenState extends State<TopicHistoryScreen> {
                           item['equation'] ?? "Unknown Problem",
                           style: const TextStyle(fontWeight: FontWeight.bold),
                         ),
-                        subtitle: Text(item['timestamp'] ?? ""),
+                        subtitle: Text(
+  item['timestamp'] != null
+      ? formatToIST(item['timestamp'])
+      : "",
+),
                         trailing: const Icon(Icons.arrow_forward_ios, size: 16),
                         onTap: () {
                           Navigator.push(

@@ -19,6 +19,17 @@ class Config {
 void main() {
   runApp(const MyApp());
 }
+Future<int> getSolvedCount() async {
+  final prefs = await SharedPreferences.getInstance();
+  return prefs.getInt("problems_solved") ?? 0;
+}
+
+Future<void> incrementSolvedCount() async {
+  final prefs = await SharedPreferences.getInstance();
+  final current = prefs.getInt("problems_solved") ?? 0;
+  await prefs.setInt("problems_solved", current + 1);
+}
+
 Future<String> getUserId() async {
   final prefs = await SharedPreferences.getInstance();
   String? id = prefs.getString("user_id");
@@ -40,6 +51,14 @@ class MyApp extends StatelessWidget {
       theme: ThemeData(
         useMaterial3: true,
         fontFamily: 'Roboto',
+
+        appBarTheme: const AppBarTheme(
+          backgroundColor: Color(0xFF5C87FF), // Xolver blue
+          foregroundColor: Colors.white,      // title + icons
+          elevation: 0,
+          centerTitle: false,
+        ),
+        
         colorScheme: const ColorScheme(
           brightness: Brightness.light,
           primary: Color(0xFF5C87FF), 
@@ -58,7 +77,51 @@ class MyApp extends StatelessWidget {
           onError: Colors.white,
         ),
       ),
-      home: const MyHomePage(),
+      home: const HomeShell(),
+    );
+  }
+}
+class HomeShell extends StatefulWidget {
+  const HomeShell({super.key});
+
+  @override
+  State<HomeShell> createState() => _HomeShellState();
+}
+
+class _HomeShellState extends State<HomeShell> {
+  int _currentIndex = 0;
+
+  final List<Widget> _pages = const [
+    MyHomePage(),     // Ask AI to Solve
+    Dashboard(),      // Dashboard
+    HistoryScreen(),  // History
+  ];
+
+  final List<String> _titles = [
+    "Xolver",
+    "Dashboard",
+    "History",
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(_titles[_currentIndex]),
+        automaticallyImplyLeading: true, // ✅ IMPORTANT
+      ),
+
+      drawer: AppDrawer(
+        currentIndex: _currentIndex,
+        onSelect: (index) {
+          setState(() {
+            _currentIndex = index;
+          });
+          Navigator.pop(context); // close drawer
+        },
+      ),
+
+      body: _pages[_currentIndex],
     );
   }
 }
@@ -89,7 +152,18 @@ class _MyHomePageState extends State<MyHomePage> {
   String cleanMath(String input) {
     return input.replaceAll(r'$', '').replaceAll(r'\[', '').replaceAll(r'\]', '');
   }
+  Future<int> getSolvedCount() async {
+  final userId = await getUserId();
+  final res = await http.get(
+    Uri.parse("${Config.baseUrl}/api/history?user_id=$userId"),
+  );
 
+  if (res.statusCode == 200) {
+    final List data = jsonDecode(res.body);
+    return data.length;
+  }
+  return 0;
+}
   Future<void> _pickImage() async {
     final XFile? pickedFile = await _picker.pickImage(source: ImageSource.gallery);
     if (pickedFile != null) {
@@ -171,6 +245,7 @@ class _MyHomePageState extends State<MyHomePage> {
         if (historyResponse.statusCode == 200) {
            final historyData = jsonDecode(historyResponse.body);
            newHistoryId = historyData['id']; 
+           await incrementSolvedCount();
         }
 
         setState(() {
@@ -213,7 +288,8 @@ Future<void> _startHintSession() async {
 
     if (historyResponse.statusCode == 200) {
       final historyData = jsonDecode(historyResponse.body);
-      _currentHistoryId = historyData['id']; // 🔑 STORE IT
+      _currentHistoryId = historyData['id'];
+      await incrementSolvedCount(); // 🔑 STORE IT
 
       if (mounted) {
         _openChat(forcedId: _currentHistoryId, isHint: true);
@@ -225,31 +301,40 @@ Future<void> _startHintSession() async {
     }
 
   // Helper to open chat
-  void _openChat({String? forcedId, bool isHint = false}) {
-    final idToUse = forcedId ?? _currentHistoryId;
+  Future<void> _openChat({String? forcedId, bool isHint = false}) async {
+  final idToUse = forcedId ?? _currentHistoryId;
 
-    if (idToUse == null) {
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Error: No Session ID.")));
-      return;
-    }
-    
-    String? initialMsg = isHint 
-        ? "I am stuck on this problem: ${_equationController.text}. Please give me a small hint for the first step. Do NOT solve it completely." 
-        : null;
-
-    Navigator.push(
-      context,
-      MaterialPageRoute(
-        builder: (context) => ChatScreen(
-          baseUrl: Config.baseUrl,
-          problemContext: "Problem: ${_equationController.text}\nSolution: $_solution",
-          historyId: idToUse,
-          initialMessage: initialMsg,
-          isHintMode: isHint,
-        ),
-      ),
+  if (idToUse == null) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("Error: No Session ID.")),
     );
+    return;
   }
+
+  // 🔑 GET USER ID HERE (THIS WAS MISSING)
+  final userId = await getUserId();
+
+  String? initialMsg = isHint
+      ? "I am stuck on this problem: ${_equationController.text}. "
+        "Please give me a small hint for the first step. Do NOT solve it completely."
+      : null;
+
+  Navigator.push(
+    context,
+    MaterialPageRoute(
+      builder: (_) => ChatScreen(
+        baseUrl: Config.baseUrl,
+        problemContext:
+            "Problem: ${_equationController.text}\nSolution: $_solution",
+        historyId: idToUse,
+        userId: userId, // ✅ NOW IT EXISTS
+        initialMessage: initialMsg,
+        isHintMode: isHint,
+      ),
+    ),
+  );
+}
+
 
   @override
   Widget build(BuildContext context) {
@@ -259,59 +344,9 @@ Future<void> _startHintSession() async {
     return Scaffold(
       backgroundColor: const Color(0xFFF5F7FA),
       
-      drawer: Drawer(
-        child: Column(
-          children: [
-            UserAccountsDrawerHeader(
-              decoration: BoxDecoration(color: brandColor),
-              accountName: const Text("Xolver Student"),
-              accountEmail: const Text("student@xolver.ai"),
-              currentAccountPicture: const CircleAvatar(
-                backgroundColor: Colors.white,
-                child: Icon(Icons.person, size: 40, color: Color(0xFF5C87FF)),
-              ),
-            ),
-            ListTile(
-  leading: const Icon(Icons.dashboard_outlined),
-  title: const Text("Dashboard"),
-  onTap: () {
-    Navigator.pop(context);
-    Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => const Dashboard()),
-    );
-  },
-),
-            ListTile(
-              leading: const Icon(Icons.camera_alt_outlined),
-              title: const Text("Ask AI to Solve"),
-              selected: true,
-              selectedColor: brandColor,
-              onTap: () => Navigator.pop(context),
-            ),
-            ListTile(
-              leading: const Icon(Icons.history),
-              title: const Text("History"),
-              onTap: () {
-                Navigator.pop(context);
-                Navigator.push(context, MaterialPageRoute(builder: (context) => const HistoryScreen()));
-              },
-            ),
-          ],
-        ),
-      ),
 
       body: CustomScrollView(
         slivers: [
-          SliverAppBar(
-            backgroundColor: Colors.white, 
-            foregroundColor: Colors.black87,
-            centerTitle: true,
-            toolbarHeight: 100,
-            title: Text("Xolver", style: TextStyle(color: brandColor, fontWeight: FontWeight.bold, fontSize: 28)),
-            pinned: true,
-            elevation: 1,
-          ),
 
           SliverToBoxAdapter(
             child: Padding(
@@ -482,7 +517,7 @@ Future<void> _startHintSession() async {
       
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _pickImage,
-        label: const Text("SNAP PROBLEM"),
+        label: const Text("SNAP"),
         icon: const Icon(Icons.camera_alt),
         backgroundColor: brandColor,
         foregroundColor: Colors.white,
@@ -557,11 +592,6 @@ String formatToIST(String isoTime) {
 @override
 Widget build(BuildContext context) {
   return Scaffold(
-    appBar: AppBar(
-      title: const Text("History"),
-      backgroundColor: Colors.white,
-      foregroundColor: Colors.black,
-    ),
     body: _isLoading
         ? const Center(child: CircularProgressIndicator())
         : _history.isEmpty
@@ -661,5 +691,68 @@ class MathExplanation extends StatelessWidget {
       }
     }
     return RichText(text: TextSpan(children: spans));
+  }
+}
+
+class AppDrawer extends StatelessWidget {
+  final Function(int) onSelect;
+  final int currentIndex;
+
+  const AppDrawer({super.key, required this.onSelect,required this.currentIndex});
+
+  @override
+  Widget build(BuildContext context) {
+    final brandColor = Theme.of(context).colorScheme.primary;
+
+    return Drawer(
+      child: Column(
+        children: [
+          UserAccountsDrawerHeader(
+  decoration: BoxDecoration(color: brandColor),
+  accountName: const Text(
+    "Xolver Student",
+    style: TextStyle(fontWeight: FontWeight.bold),
+  ),
+  accountEmail: FutureBuilder<int>(
+    future: getSolvedCount(),
+    builder: (context, snapshot) {
+      final count = snapshot.data ?? 0;
+      return Text("Problems Solved: $count");
+    },
+  ),
+  currentAccountPicture: const CircleAvatar(
+    backgroundColor: Colors.white,
+    child: Icon(Icons.person, size: 40, color: Color(0xFF5C87FF)),
+  ),
+),
+
+          ListTile(
+  leading: const Icon(Icons.camera_alt_outlined),
+  title: const Text("Ask AI to Solve"),
+  selected: currentIndex == 0,
+  selectedTileColor: Colors.blue.withOpacity(0.1),
+  selectedColor: Theme.of(context).colorScheme.primary,
+  onTap: () => onSelect(0),
+),
+
+          ListTile(
+  leading: const Icon(Icons.dashboard_outlined),
+  title: const Text("Dashboard"),
+  selected: currentIndex == 1,
+  selectedTileColor: Colors.blue.withOpacity(0.1),
+  selectedColor: Theme.of(context).colorScheme.primary,
+  onTap: () => onSelect(1),
+),
+          ListTile(
+  leading: const Icon(Icons.history),
+  title: const Text("History"),
+  selected: currentIndex == 2,
+  selectedTileColor: Colors.blue.withOpacity(0.1),
+  selectedColor: Theme.of(context).colorScheme.primary,
+  onTap: () => onSelect(2),
+),
+        ],
+      ),
+    );
   }
 }

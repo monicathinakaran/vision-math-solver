@@ -11,12 +11,14 @@ class ChatScreen extends StatefulWidget {
   final String historyId;
   final String? initialMessage;
   final bool isHintMode; 
+  final String userId;
 
   const ChatScreen({
     super.key, 
     required this.baseUrl,      // <--- Fixes the 'baseUrl' error
     required this.problemContext, 
     required this.historyId,
+    required this.userId,
     this.initialMessage,
     this.isHintMode = false,    // <--- Fixes the 'isHintMode' error
   });
@@ -52,8 +54,10 @@ class _ChatScreenState extends State<ChatScreen> {
 Future<void> _fetchChatHistory() async {
   try {
     final response = await http.get(
-      Uri.parse("${widget.baseUrl}/api/history/${widget.historyId}"),
-    );
+  Uri.parse(
+    "${widget.baseUrl}/api/history/${widget.historyId}?user_id=${widget.userId}",
+  ),
+);
 
     if (response.statusCode == 200) {
       final data = jsonDecode(response.body);
@@ -99,7 +103,7 @@ final userId = await getUserId();
 
 final response = await http.get(
   Uri.parse(
-    "${widget.baseUrl}/api/history/${widget.historyId}?user_id=$userId"
+    "${widget.baseUrl}/api/history/${widget.historyId}?user_id=${widget.userId}",
   ),
 );
     } catch (e) {
@@ -174,7 +178,7 @@ Future<void> _sendMessage({String? manualText, bool isHidden = false}) async {
 
 await http.put(
   Uri.parse(
-    "${widget.baseUrl}/api/history/${widget.historyId}?user_id=$userId"
+    "${widget.baseUrl}/api/history/${widget.historyId}?user_id=${widget.userId}",
   ),
   headers: {"Content-Type": "application/json"},
   body: jsonEncode({
