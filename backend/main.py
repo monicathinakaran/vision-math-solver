@@ -48,8 +48,9 @@ class HistoryItem(BaseModel):
 
 class ChatRequest(BaseModel):
     context: str
-    history: list 
-    message: str 
+    history: list
+    message: str
+    mode: str = "tutor" 
 
 class ChatUpdate(BaseModel):
     chat_history: list
@@ -135,7 +136,7 @@ async def chat_with_tutor(request: ChatRequest):
             content = msg.get("parts", [{}])[0].get("text", "") if "parts" in msg else msg.get("text", "")
             if content:
                 groq_history.append({"role": role, "content": content})
-        
+        mode = getattr(request, "mode", "tutor")
         # --- SELECT PROMPT BASED ON MODE ---
         if request.mode == "hint":
             # Mode A: Socratic Hint Giver (Strict)
@@ -173,6 +174,8 @@ async def chat_with_tutor(request: ChatRequest):
         )
         
         reply = completion.choices[0].message.content
+        if not reply:
+            return {"reply": "Sorry, I couldn't generate a response. Try again."}
         return {"reply": reply.replace("$$", "$")} 
         
     except Exception as e:
