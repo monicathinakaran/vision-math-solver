@@ -1,6 +1,5 @@
 # 📘 Xolver — AI-Powered Math & Physics Solver
 
-![Status](https://img.shields.io/badge/Status-Production%20Ready-success)
 ![Platform](https://img.shields.io/badge/Platform-Android%20(Flutter)-blue)
 ![Backend](https://img.shields.io/badge/Backend-FastAPI-009688)
 ![AI](https://img.shields.io/badge/AI-Gemini%20%7C%20LLaMA%203.3-purple)
@@ -8,6 +7,13 @@
 **Xolver** is a multimodal educational application engineered to solve complex Math and Physics problems using advanced Computer Vision and Large Language Models.
 
 Unlike standard solvers that simply dump answers, Xolver features a **Socratic “Hint Mode”** designed to guide users through the learning process without revealing the solution immediately. The app is built with a production-ready **FastAPI** backend and a **Flutter** frontend optimized for offline-first APK distribution.
+
+---
+## 📱 Demo APK
+Try the Android app here:  
+👉 **[Download APK](https://drive.google.com/file/d/1R-9cd2kbzgHyH6AqGqn3pOsgX1iRxqz1/view?usp=sharing)**
+
+> _Note: This APK is provided for demonstration purposes. Full source code and implementation details are available in this repository._
 
 ---
 
@@ -94,6 +100,22 @@ Unlike standard solvers that simply dump answers, Xolver features a **Socratic �
 - **Solver LLM:** LLaMA 3.3 (70B) via Groq
 - **Topic Classifier:** LLaMA 3.1 (8B)
 
+---
+## 🧩 System Architecture
+
+The core pipeline of the application follows this flow:
+
+```mermaid
+graph TD
+    A[User Input] -->|Image or Text| B(Gemini Vision OCR)
+    B --> C{Reasoning Engine}
+    C -->|Context| D[LLM Reasoning]
+    C -->|Verification| E[Symbolic Computation]
+    D & E --> F[Step-by-Step LaTeX Solutions]
+    D & E --> G[Socratic Hints]
+    F & G --> H[Flutter UI]
+    H -->|Save History| I[(MongoDB Persistence)]
+```
 ---
 
 ## 🗄️ Database Schema (MongoDB)
