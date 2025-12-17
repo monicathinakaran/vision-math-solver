@@ -10,7 +10,7 @@ import 'chat_screen.dart';
 class Config {
   // Use 'http://10.0.2.2:8000' for Android Emulator
   // Use 'https://xolver-backend.onrender.com' for Production
-  static const String baseUrl = "https://xolver-backend.onrender.com"; 
+  static const String baseUrl = "http://192.168.1.13:8000"; 
 }
 
 void main() {
@@ -176,8 +176,7 @@ class _MyHomePageState extends State<MyHomePage> {
     }
   }
 
-  // --- MODE B: JUST GET HINT (Before Solving) ---
-  Future<void> _startHintSession() async {
+Future<void> _startHintSession() async {
     setState(() { _isStartingHint = true; _errorMessage = null; });
 
     try {
@@ -204,6 +203,8 @@ class _MyHomePageState extends State<MyHomePage> {
         setState(() { _errorMessage = "Could not start hint session"; });
       }
     } catch (e) {
+      // --- CRITICAL LOGGING ADDED HERE ---
+      print("CRITICAL CONNECTION ERROR: $e"); 
       setState(() { _errorMessage = "Connection Error: $e"; });
     } finally {
       setState(() { _isStartingHint = false; });
