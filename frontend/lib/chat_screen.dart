@@ -61,11 +61,12 @@ class _ChatScreenState extends State<ChatScreen> {
           _messages = List<Map<String, dynamic>>.from(history);
           _isLoading = false;
         });
-
+        bool _initialHintSent = false;
         // If history is empty and we have an initial message (Hint Mode), send it automatically
-        if (_messages.isEmpty && widget.initialMessage != null) {
-          _sendMessage(manualText: widget.initialMessage, isHidden: true); 
-        } else {
+if (_messages.isEmpty && widget.initialMessage != null && !_initialHintSent) {
+  _initialHintSent = true;
+  _sendMessage(manualText: widget.initialMessage, isHidden: true);
+} else {
            _scrollToBottom();
         }
       }
@@ -98,16 +99,15 @@ class _ChatScreenState extends State<ChatScreen> {
     _scrollToBottom();
 
     try {
-      final response = await http.post(
-        Uri.parse("${widget.baseUrl}/api/chat"),
-        headers: {"Content-Type": "application/json"},
-        body: jsonEncode({
-          "context": widget.problemContext,
-          "history": _messages.map((m) => {"role": m['role'] == "user" ? "user" : "model", "parts": [{"text": m['text']}]}).toList(),
-          "message": text,
-          "mode": widget.isHintMode ? "hint" : "tutor" // <--- PASS THE MODE HERE
-        }),
+      final response = await http.put(
+      Uri.parse("${widget.baseUrl}/api/history/${widget.historyId}"),
+      headers: {"Content-Type": "application/json"},
+      body: jsonEncode({
+      "chat_history": _messages,
+      "mode": widget.isHintMode ? "hint" : "tutor"
+      }),
       );
+
       
       final data = jsonDecode(response.body);
       final reply = data['reply'] ?? "Error connecting to AI.";

@@ -5,6 +5,7 @@ import 'dart:convert';
 import 'package:image_picker/image_picker.dart';
 import 'package:flutter_math_fork/flutter_math.dart';
 import 'chat_screen.dart'; 
+import 'HistoryDetailScreen.dart';
 
 // --- CONFIGURATION ---
 class Config {
@@ -180,6 +181,10 @@ Future<void> _startHintSession() async {
     setState(() { _isStartingHint = true; _errorMessage = null; });
 
     try {
+      if (_currentHistoryId != null) {
+      _openChat(forcedId: _currentHistoryId, isHint: true);
+      return;
+      }
       // We don't solve it. We just register the problem in DB to get an ID for the chat.
       final historyResponse = await http.post(
          Uri.parse("${Config.baseUrl}/api/history"),
@@ -188,28 +193,21 @@ Future<void> _startHintSession() async {
            "equation": _equationController.text,
            "solution": "Hint Session", 
            "explanation": "User requested hints only."
-         })
+         }),
       );
 
-      if (historyResponse.statusCode == 200) {
-         final historyData = jsonDecode(historyResponse.body);
-         String hintId = historyData['id'];
-         
-         // Navigate immediately
-         if (mounted) {
-           _openChat(forcedId: hintId, isHint: true);
-         }
-      } else {
-        setState(() { _errorMessage = "Could not start hint session"; });
+    if (historyResponse.statusCode == 200) {
+      final historyData = jsonDecode(historyResponse.body);
+      _currentHistoryId = historyData['id']; // 🔑 STORE IT
+
+      if (mounted) {
+        _openChat(forcedId: _currentHistoryId, isHint: true);
+      } 
       }
-    } catch (e) {
-      // --- CRITICAL LOGGING ADDED HERE ---
-      print("CRITICAL CONNECTION ERROR: $e"); 
-      setState(() { _errorMessage = "Connection Error: $e"; });
-    } finally {
-      setState(() { _isStartingHint = false; });
+      } finally{
+        setState(() { _isStartingHint = false; });
+      }
     }
-  }
 
   // Helper to open chat
   void _openChat({String? forcedId, bool isHint = false}) {
@@ -504,30 +502,54 @@ class _HistoryScreenState extends State<HistoryScreen> {
     }
   }
 
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text("History"), backgroundColor: Colors.white, foregroundColor: Colors.black),
-      body: _isLoading 
+@override
+Widget build(BuildContext context) {
+  return Scaffold(
+    appBar: AppBar(
+      title: const Text("History"),
+      backgroundColor: Colors.white,
+      foregroundColor: Colors.black,
+    ),
+    body: _isLoading
         ? const Center(child: CircularProgressIndicator())
-        : _history.isEmpty 
-          ? const Center(child: Text("No history yet"))
-          : ListView.builder(
-              itemCount: _history.length,
-              itemBuilder: (context, index) {
-                final item = _history[index];
-                return Card(
-                  margin: const EdgeInsets.symmetric(horizontal: 15, vertical: 8),
-                  child: ListTile(
-                    title: Text(item['equation'] ?? "Unknown Equation", style: const TextStyle(fontWeight: FontWeight.bold)),
-                    subtitle: Text(item['timestamp'] ?? ""),
-                    trailing: const Icon(Icons.arrow_forward_ios, size: 16),
-                  ),
-                );
-              },
-            ),
-    );
-  }
+        : _history.isEmpty
+            ? const Center(child: Text("No history yet"))
+            : ListView.builder(
+                itemCount: _history.length,
+                itemBuilder: (context, index) {
+                  final item = _history[index];
+
+                  return Card(
+                    margin: const EdgeInsets.symmetric(
+                      horizontal: 15,
+                      vertical: 8,
+                    ),
+                    child: ListTile(
+                      title: Text(
+                        item['equation'] ?? "Unknown Equation",
+                        style: const TextStyle(fontWeight: FontWeight.bold),
+                      ),
+                      subtitle: Text(item['timestamp'] ?? ""),
+                      trailing: const Icon(
+                        Icons.arrow_forward_ios,
+                        size: 16,
+                      ),
+                      onTap: () {
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (_) => HistoryDetailScreen(
+                              historyId: item['_id'].toString(),
+                            ),
+                          ),
+                        );
+                      },
+                    ),
+                  );
+                },
+              ),
+  );
+}
 }
 
 class MathExplanation extends StatelessWidget {
