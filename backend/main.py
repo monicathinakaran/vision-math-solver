@@ -39,6 +39,7 @@ class MathRequest(BaseModel):
     equation: str
 
 class HistoryItem(BaseModel):
+    user_id: str
     equation: str
     solution: str = None
     explanation: str = None
@@ -52,7 +53,8 @@ class ChatRequest(BaseModel):
     context: str
     history: list
     message: str
-    mode: str = "tutor" 
+    mode: str = "tutor"
+    user_id: str | None = None 
 
 class ChatUpdate(BaseModel):
     chat_history: list
@@ -188,26 +190,29 @@ async def chat_with_tutor(request: ChatRequest):
 @app.post("/api/history")
 async def save_history(item: HistoryItem):
     try:
-        from datetime import datetime, timezone
-
         item.timestamp = datetime.now(timezone.utc).isoformat()
 
-        # 👇 ADD THIS LINE ONLY
         item.topic = classify_topic_with_groq(item.equation)
 
+        # 🔧 ADD THIS
+        if item.solution == "Hint Session":
+            item.mode_used = "hint"
+        else:
+            item.mode_used = "solve"
+
         result = await history_collection.insert_one(item.dict())
-        return {
-            "message": "Saved",
-            "id": str(result.inserted_id)
-        }
+        return {"message": "Saved", "id": str(result.inserted_id)}
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
     
 @app.get("/api/history")
-async def get_history():
+async def get_history(user_id:str):
     try:
         history_list = []
-        cursor = history_collection.find({}).sort("_id", -1).limit(20)
+        cursor = history_collection.find({"user_id": user_id}).sort("_id", -1).limit(20)
+
         async for document in cursor:
             document["_id"] = str(document["_id"])
             history_list.append(document)
@@ -216,9 +221,12 @@ async def get_history():
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/history/{id}")
-async def get_history_item(id: str):
+async def get_history_item(id: str,user_id: str):
     try:
-        doc = await history_collection.find_one({"_id": ObjectId(id)})
+        doc = await history_collection.find_one({
+    "_id": ObjectId(id),
+    "user_id": user_id
+})
         if doc:
             doc["_id"] = str(doc["_id"])
             return doc
@@ -227,37 +235,47 @@ async def get_history_item(id: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.put("/api/history/{id}")
-async def update_history_chat(id: str, update: ChatUpdate):
+async def update_history_chat(id: str, update: ChatUpdate, user_id: str):
     try:
         field = "hint_chat" if update.mode == "hint" else "tutor_chat"
 
         await history_collection.update_one(
-            {"_id": ObjectId(id)},
             {
-                "$set": {
-                    field: update.chat_history
-                }
-            }
+                "_id": ObjectId(id),
+                "user_id": user_id
+            },
+            {"$set": {field: update.chat_history}}
         )
+
         return {"message": "Chat updated"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @app.delete("/api/history/{id}/chat")
-async def clear_chat_history(id: str):
+async def clear_chat_history(id: str, user_id: str):
     try:
         await history_collection.update_one(
-            {"_id": ObjectId(id)},
-            {"$set": {"chat_history": []}}
+            {
+                "_id": ObjectId(id),
+                "user_id": user_id
+            },
+            {"$set": {"hint_chat": [], "tutor_chat": []}}
         )
         return {"message": "Chat cleared"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @app.get("/api/dashboard/topics")
-async def dashboard_topics():
+async def dashboard_topics(user_id: str):
     pipeline = [
-        {"$match": {"topic": {"$ne": None}}},
+        {
+            "$match": {
+                "user_id": user_id,
+                "topic": {"$ne": None}
+            }
+        },
         {
             "$group": {
                 "_id": "$topic",
@@ -275,6 +293,7 @@ async def dashboard_topics():
         })
 
     return result
+
 # --- HELPER FUNCTIONS ---
 # Ensure you have imports: 
 # from sympy import sympify, solve, Symbol, Eq, parse_expr, latex
