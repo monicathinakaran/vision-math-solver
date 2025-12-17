@@ -1,13 +1,21 @@
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
-
+import 'package:shared_preferences/shared_preferences.dart';
 import 'main.dart'; // for Config.baseUrl
 import 'package:fl_chart/fl_chart.dart';
+import 'topic_history_screen.dart';
 
 Future<List<dynamic>> fetchDashboardTopics() async {
+  final prefs = await SharedPreferences.getInstance();
+  final userId = prefs.getString("user_id");
+
+  if (userId == null) return [];
+
   final res = await http.get(
-    Uri.parse("${Config.baseUrl}/api/dashboard/topics"),
+    Uri.parse(
+      "${Config.baseUrl}/api/dashboard/topics?user_id=$userId"
+    ),
   );
 
   if (res.statusCode == 200) {
@@ -16,7 +24,7 @@ Future<List<dynamic>> fetchDashboardTopics() async {
   return [];
 }
 
-Widget topicList(List topics) {
+Widget topicList(BuildContext context, List topics) {
   return Column(
     crossAxisAlignment: CrossAxisAlignment.start,
     children: [
@@ -26,15 +34,45 @@ Widget topicList(List topics) {
       ),
       const SizedBox(height: 10),
       ...topics.map(
-        (t) => ListTile(
-          leading: const Icon(Icons.book_outlined),
-          title: Text(t['topic']),
-          trailing: Text(
-            t['count'].toString(),
+  (t) {
+    final topicName = t['topic'];
+    final count = t['count'];
+
+    return ListTile(
+      leading: const Icon(Icons.bookmark_border),
+      title: Text(topicName),
+      trailing: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            count.toString(),
             style: const TextStyle(fontWeight: FontWeight.bold),
           ),
+          const SizedBox(width: 8),
+IconButton(
+  icon: const Icon(Icons.arrow_forward_ios, size: 16),
+  onPressed: () async {
+    final userId = await getUserId();
+    if (userId == null) return;
+
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) => TopicHistoryScreen(
+          topic: topicName,
+          userId: userId, // ✅ THIS WAS MISSING
         ),
       ),
+    );
+  },
+),
+
+
+        ],
+      ),
+    );
+  },
+),
     ],
   );
 }
@@ -73,45 +111,42 @@ Widget topicPieChart(List topics) {
   );
 }
 
-class DashboardScreen extends StatelessWidget {
-  const DashboardScreen({super.key});
+class Dashboard extends StatelessWidget {
+  const Dashboard({super.key});
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      backgroundColor: const Color(0xFFF5F7FA),
       appBar: AppBar(
         title: const Text("Dashboard"),
         backgroundColor: Colors.white,
         foregroundColor: Colors.black,
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(20),
-        child: FutureBuilder(
-          future: fetchDashboardTopics(),
-          builder: (context, snapshot) {
-            if (!snapshot.hasData) {
-              return const Center(child: CircularProgressIndicator());
-            }
+      body: FutureBuilder<List<dynamic>>(
+        future: fetchDashboardTopics(),
+        builder: (context, snapshot) {
+          if (snapshot.connectionState == ConnectionState.waiting) {
+            return const Center(child: CircularProgressIndicator());
+          }
 
-            final topics = snapshot.data as List;
+          if (!snapshot.hasData || snapshot.data!.isEmpty) {
+            return const Center(child: Text("No data yet"));
+          }
 
-            if (topics.isEmpty) {
-              return const Center(child: Text("No activity yet."));
-            }
+          final topics = snapshot.data!;
 
-            return SingleChildScrollView(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  topicPieChart(topics),
-                  const SizedBox(height: 25),
-                  topicList(topics),
-                ],
-              ),
-            );
-          },
-        ),
+          return SingleChildScrollView(
+            padding: const EdgeInsets.all(20),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                topicPieChart(topics),
+                const SizedBox(height: 30),
+                topicList(context, topics),
+              ],
+            ),
+          );
+        },
       ),
     );
   }

@@ -1,15 +1,18 @@
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
-
-import 'main.dart';              // for Config.baseUrl
-import 'chat_screen.dart';       // for ChatMathRenderer
-import 'main.dart' show MathExplanation; 
+import 'main.dart' show Config, MathExplanation;          // for Config.baseUrl       // for ChatMathRenderer
 import 'ChatHistoryView.dart';
 
 class HistoryDetailScreen extends StatefulWidget {
   final String historyId;
-  const HistoryDetailScreen({super.key, required this.historyId});
+  final String userId; // ✅ ADD
+
+  const HistoryDetailScreen({
+    super.key,
+    required this.historyId,
+    required this.userId, // ✅ ADD
+  });
 
   @override
   State<HistoryDetailScreen> createState() => _HistoryDetailScreenState();
@@ -26,12 +29,14 @@ class _HistoryDetailScreenState extends State<HistoryDetailScreen> {
   }
 
   Future<void> _fetch() async {
-    final res = await http.get(
-      Uri.parse("${Config.baseUrl}/api/history/${widget.historyId}")
-    );
-    if (res.statusCode == 200) {
+    final response = await http.get(
+  Uri.parse(
+    "${Config.baseUrl}/api/history/${widget.historyId}?user_id=${widget.userId}"
+  ),
+);
+    if (response.statusCode == 200) {
       setState(() {
-        data = jsonDecode(res.body);
+        data = jsonDecode(response.body);
         loading = false;
       });
     }

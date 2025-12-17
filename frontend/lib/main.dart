@@ -7,7 +7,8 @@ import 'package:flutter_math_fork/flutter_math.dart';
 import 'chat_screen.dart'; 
 import 'HistoryDetailScreen.dart';
 import 'dashboard.dart';
-
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:uuid/uuid.dart';
 // --- CONFIGURATION ---
 class Config {
   // Use 'http://10.0.2.2:8000' for Android Emulator
@@ -18,10 +19,19 @@ class Config {
 void main() {
   runApp(const MyApp());
 }
+Future<String> getUserId() async {
+  final prefs = await SharedPreferences.getInstance();
+  String? id = prefs.getString("user_id");
+
+  if (id == null) {
+    id = const Uuid().v4();
+    await prefs.setString("user_id", id);
+  }
+  return id;
+}
 
 class MyApp extends StatelessWidget {
   const MyApp({super.key});
-
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
@@ -95,7 +105,6 @@ class _MyHomePageState extends State<MyHomePage> {
       _processImage(pickedFile);
     }
   }
-
   Future<void> _processImage(XFile image) async {
     setState(() { _isUploading = true; _errorMessage = null; });
     
@@ -145,7 +154,7 @@ class _MyHomePageState extends State<MyHomePage> {
 
         final solution = data['solution'];
         final explanation = data['explanation'];
-
+        final userId = await getUserId();
         // 2. Save (Get ID)
         final historyResponse = await http.post(
            Uri.parse("${Config.baseUrl}/api/history"),
@@ -153,7 +162,8 @@ class _MyHomePageState extends State<MyHomePage> {
            body: jsonEncode({
              "equation": _equationController.text,
              "solution": solution,
-             "explanation": explanation
+             "explanation": explanation,
+             "user_id": userId,
            })
         );
 
@@ -187,14 +197,18 @@ Future<void> _startHintSession() async {
       return;
       }
       // We don't solve it. We just register the problem in DB to get an ID for the chat.
+      final userId = await getUserId();
       final historyResponse = await http.post(
          Uri.parse("${Config.baseUrl}/api/history"),
          headers: {"Content-Type": "application/json"},
-         body: jsonEncode({
-           "equation": _equationController.text,
-           "solution": "Hint Session", 
-           "explanation": "User requested hints only."
-         }),
+
+          body: jsonEncode({
+            "equation": _equationController.text,
+            "solution": "Hint Session",
+            "explanation": "User requested hints only.",
+            "user_id": userId,
+          }),
+
       );
 
     if (historyResponse.statusCode == 200) {
@@ -264,7 +278,7 @@ Future<void> _startHintSession() async {
     Navigator.pop(context);
     Navigator.push(
       context,
-      MaterialPageRoute(builder: (_) => const DashboardScreen()),
+      MaterialPageRoute(builder: (_) => const Dashboard()),
     );
   },
 ),
@@ -468,7 +482,7 @@ Future<void> _startHintSession() async {
       
       floatingActionButton: FloatingActionButton.extended(
         onPressed: _pickImage,
-        label: const Text("SNAP"),
+        label: const Text("SNAP PROBLEM"),
         icon: const Icon(Icons.camera_alt),
         backgroundColor: brandColor,
         foregroundColor: Colors.white,
@@ -488,26 +502,39 @@ class HistoryScreen extends StatefulWidget {
 class _HistoryScreenState extends State<HistoryScreen> {
   List<dynamic> _history = [];
   bool _isLoading = true;
-
+  String? _userId; 
   @override
-  void initState() {
-    super.initState();
-    _fetchHistory();
-  }
+void initState() {
+  super.initState();
+  _initUser();
+}
 
-  Future<void> _fetchHistory() async {
-    try {
-      final response = await http.get(Uri.parse("${Config.baseUrl}/api/history"));
-      if (response.statusCode == 200) {
-        setState(() {
-          _history = jsonDecode(response.body);
-          _isLoading = false;
-        });
-      }
-    } catch (e) {
-      setState(() { _isLoading = false; });
+Future<void> _initUser() async {
+  final id = await getUserId();
+  setState(() {
+    _userId = id;
+  });
+  _fetchHistory();
+}
+
+Future<void> _fetchHistory() async {
+  if (_userId == null) return;
+
+  try {
+    final response = await http.get(
+      Uri.parse("${Config.baseUrl}/api/history?user_id=$_userId"),
+    );
+
+    if (response.statusCode == 200) {
+      setState(() {
+        _history = jsonDecode(response.body);
+        _isLoading = false;
+      });
     }
+  } catch (e) {
+    setState(() => _isLoading = false);
   }
+}
 String formatToIST(String isoTime) {
   try {
     final utcTime = DateTime.parse(isoTime).toUtc();
@@ -564,15 +591,18 @@ Widget build(BuildContext context) {
                         size: 16,
                       ),
                       onTap: () {
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => HistoryDetailScreen(
-                              historyId: item['_id'].toString(),
-                            ),
-                          ),
-                        );
-                      },
+  if (_userId == null) return;
+
+  Navigator.push(
+    context,
+    MaterialPageRoute(
+      builder: (_) => HistoryDetailScreen(
+        historyId: item['_id'].toString(),
+        userId: _userId!,
+      ),
+    ),
+  );
+},
                     ),
                   );
                 },

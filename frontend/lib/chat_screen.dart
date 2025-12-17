@@ -2,7 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'package:flutter_math_fork/flutter_math.dart';
-
+import 'package:uuid/uuid.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 class ChatScreen extends StatefulWidget {
   // --- NEW PARAMETERS ADDED HERE ---
   final String baseUrl;
@@ -29,7 +30,7 @@ class _ChatScreenState extends State<ChatScreen> {
   final ScrollController _scrollController = ScrollController();
   List<Map<String, dynamic>> _messages = [];
   bool _isLoading = true;
-
+   bool _initialHintSent = false; // ✅ MOVE IT HERE
   @override
   void initState() {
     super.initState();
@@ -48,87 +49,150 @@ class _ChatScreenState extends State<ChatScreen> {
     });
   }
 
-  Future<void> _fetchChatHistory() async {
-    try {
-      // Use the passed baseUrl
-      final response = await http.get(Uri.parse("${widget.baseUrl}/api/history/${widget.historyId}"));
-      
-      if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        final List history = data['chat_history'] ?? [];
-        
-        setState(() {
-          _messages = List<Map<String, dynamic>>.from(history);
-          _isLoading = false;
-        });
-        bool _initialHintSent = false;
-        // If history is empty and we have an initial message (Hint Mode), send it automatically
-if (_messages.isEmpty && widget.initialMessage != null && !_initialHintSent) {
-  _initialHintSent = true;
-  _sendMessage(manualText: widget.initialMessage, isHidden: true);
-} else {
-           _scrollToBottom();
-        }
+Future<void> _fetchChatHistory() async {
+  try {
+    final response = await http.get(
+      Uri.parse("${widget.baseUrl}/api/history/${widget.historyId}"),
+    );
+
+    if (response.statusCode == 200) {
+      final data = jsonDecode(response.body);
+
+      // 🔑 Pick correct chat source
+      final List history =
+          widget.isHintMode
+              ? (data['hint_chat'] ?? data['chat_history'] ?? [])
+              : (data['tutor_chat'] ?? data['chat_history'] ?? []);
+
+      setState(() {
+        _messages = List<Map<String, dynamic>>.from(history);
+        _isLoading = false;
+      });
+
+      // ✅ Send initial hint ONLY ONCE
+      if (_messages.isEmpty &&
+          widget.initialMessage != null &&
+          !_initialHintSent) {
+        _initialHintSent = true;
+        _sendMessage(
+          manualText: widget.initialMessage,
+          isHidden: true,
+        );
       }
-    } catch (e) {
-      setState(() { _isLoading = false; });
     }
-  }
+  }catch (e) {
+  setState(() {
+    _messages.add({
+      "role": "model",
+      "text": "❌ UI Error: ${e.toString()}",
+    });
+    _isLoading = false;
+  });
+  _scrollToBottom();
+}
+}
 
   Future<void> _clearChat() async {
     setState(() { _messages.clear(); });
     try {
-      await http.delete(Uri.parse("${widget.baseUrl}/api/history/${widget.historyId}/chat"));
+final userId = await getUserId();
+
+final response = await http.get(
+  Uri.parse(
+    "${widget.baseUrl}/api/history/${widget.historyId}?user_id=$userId"
+  ),
+);
     } catch (e) {
       // Handle error silently
     }
   }
+Future<String> getUserId() async {
+  final prefs = await SharedPreferences.getInstance();
+  String? id = prefs.getString("user_id");
 
+  if (id == null) {
+    id = const Uuid().v4();
+    await prefs.setString("user_id", id);
+  }
+  return id;
+}
   // isHidden = true means we don't show the user's prompt in the bubble (good for "Give me a hint")
-  Future<void> _sendMessage({String? manualText, bool isHidden = false}) async {
-    final text = manualText ?? _controller.text.trim();
-    if (text.isEmpty) return;
+Future<void> _sendMessage({String? manualText, bool isHidden = false}) async {
+  if (_isLoading) return;
 
-    setState(() {
-      if (!isHidden) {
-        _messages.add({"role": "user", "text": text});
-      }
-      _isLoading = true;
-    });
-    _controller.clear();
-    _scrollToBottom();
+  final text = manualText ?? _controller.text.trim();
+  if (text.isEmpty) return;
 
-    try {
-      final response = await http.put(
-      Uri.parse("${widget.baseUrl}/api/history/${widget.historyId}"),
+  setState(() {
+    if (!isHidden) {
+      _messages.add({"role": "user", "text": text});
+    }
+    _isLoading = true;
+  });
+
+  _controller.clear();
+  _scrollToBottom();
+
+  try {
+    /// 🔥 1️⃣ CALL AI (THIS WAS MISSING)
+    final userId = await getUserId();
+    final chatResponse = await http.post(
+      Uri.parse("${widget.baseUrl}/api/chat"),
       headers: {"Content-Type": "application/json"},
       body: jsonEncode({
-      "chat_history": _messages,
-      "mode": widget.isHintMode ? "hint" : "tutor"
+        "context": widget.problemContext,
+        "history": _messages
+            .map((m) => {
+                  "role": m['role'] == "user" ? "user" : "model",
+                  "parts": [
+                    {"text": m['text']}
+                  ]
+                })
+            .toList(),
+        "message": text,
+        "mode": widget.isHintMode ? "hint" : "tutor",
       }),
-      );
+    );
 
-      
-      final data = jsonDecode(response.body);
-      final reply = data['reply'] ?? "Error connecting to AI.";
+    print("CHAT STATUS: ${chatResponse.statusCode}");
+    print("CHAT BODY: ${chatResponse.body}");
 
-      setState(() {
-        _messages.add({"role": "model", "text": reply});
-        _isLoading = false;
-      });
-      _scrollToBottom();
-
-      // Sync with DB
-      await http.put(
-        Uri.parse("${widget.baseUrl}/api/history/${widget.historyId}"),
-        headers: {"Content-Type": "application/json"},
-        body: jsonEncode({ "chat_history": _messages }),
-      );
-
-    } catch (e) {
-      setState(() { _isLoading = false; });
+    if (chatResponse.statusCode != 200) {
+      throw Exception(chatResponse.body);
     }
+
+    final data = jsonDecode(chatResponse.body);
+    final reply = data['reply'];
+
+    setState(() {
+      _messages.add({"role": "model", "text": reply});
+      _isLoading = false;
+    });
+
+    _scrollToBottom();
+
+
+await http.put(
+  Uri.parse(
+    "${widget.baseUrl}/api/history/${widget.historyId}?user_id=$userId"
+  ),
+  headers: {"Content-Type": "application/json"},
+  body: jsonEncode({
+    "chat_history": _messages,
+    "mode": widget.isHintMode ? "hint" : "tutor",
+  }),
+);
+
+  } catch (e) {
+    setState(() {
+      _messages.add({
+        "role": "model",
+        "text": "❌ Error: ${e.toString()}",
+      });
+      _isLoading = false;
+    });
   }
+}
 
   @override
   Widget build(BuildContext context) {
@@ -173,7 +237,14 @@ if (_messages.isEmpty && widget.initialMessage != null && !_initialHintSent) {
                     itemCount: _messages.length,
                     itemBuilder: (context, index) {
                       final msg = _messages[index];
-                      final isUser = msg['role'] == "user";
+final String role = msg['role']?.toString() ?? "model";
+final String text = msg['text']?.toString() ?? "";
+
+if (text.isEmpty) {
+  return const SizedBox.shrink(); // 🚑 skip bad messages
+}
+
+final isUser = role == "user";
                       return Align(
                         alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
                         child: Container(
@@ -193,8 +264,8 @@ if (_messages.isEmpty && widget.initialMessage != null && !_initialHintSent) {
                             ],
                           ),
                           child: isUser 
-                            ? Text(msg['text']!, style: const TextStyle(color: Colors.white, fontSize: 16))
-                            : ChatMathRenderer(text: msg['text']!), 
+                            ? Text(text, style: const TextStyle(color: Colors.white, fontSize: 16))
+                            : ChatMathRenderer(text: text), 
                         ),
                       );
                     },
