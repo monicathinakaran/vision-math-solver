@@ -37,75 +37,99 @@ class _HistoryDetailScreenState extends State<HistoryDetailScreen> {
     }
   }
 
-  @override
-  Widget build(BuildContext context) {
-    if (loading) {
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
-    }
+@override
+Widget build(BuildContext context) {
+  if (loading) {
+    return const Scaffold(
+      body: Center(child: CircularProgressIndicator()),
+    );
+  }
 
-    final isHint = data!['mode_used'] == "hint";
+  final bool isHint = data!['mode_used'] == "hint";
+  final List hintChat = data!['hint_chat'] ?? [];
+  final List tutorChat = data!['tutor_chat'] ?? [];
+  final List legacyChat = data!['chat_history'] ?? [];
 
-    return Scaffold(
-      appBar: AppBar(title: const Text("History Detail")),
-      body: SingleChildScrollView(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
+  return Scaffold(
+    appBar: AppBar(title: const Text("History Detail")),
+    body: SingleChildScrollView(
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
 
-            /// 1️⃣ FINAL OCR / EDITED PROBLEM
+          /// 1️⃣ FINAL OCR / EDITED PROBLEM
+          Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Text(
+                data!['equation'],
+                style: const TextStyle(fontSize: 18),
+              ),
+            ),
+          ),
+
+          const SizedBox(height: 20),
+
+          /// 2️⃣ SOLUTION / EXPLANATION
+          if (!isHint) ...[
             Card(
               child: Padding(
                 padding: const EdgeInsets.all(16),
-                child: Text(
-                  data!['equation'],
-                  style: const TextStyle(fontSize: 18),
+                child: MathExplanation(
+                  text: data!['explanation'] ?? "",
                 ),
               ),
             ),
-
-            const SizedBox(height: 20),
-
-            /// 2️⃣ SOLUTION / EXPLANATION
-            if (!isHint) ...[
-              Card(
-                child: Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: MathExplanation(text: data!['explanation']),
+          ] else ...[
+            Card(
+              color: Colors.orange.shade50,
+              child: const Padding(
+                padding: EdgeInsets.all(16),
+                child: Text(
+                  "User used Hint Mode. No full solution was generated.",
+                  style: TextStyle(fontWeight: FontWeight.bold),
                 ),
               ),
-            ] else ...[
-              Card(
-                color: Colors.orange.shade50,
-                child: const Padding(
-                  padding: EdgeInsets.all(16),
-                  child: Text(
-                    "User used Hint Mode. No full solution was generated.",
-                    style: TextStyle(fontWeight: FontWeight.bold),
-                  ),
-                ),
-              ),
-            ],
-
-            const SizedBox(height: 30),
-
-            /// 3️⃣ HINT CHAT
-            if ((data!['hint_chat'] ?? []).isNotEmpty) ...[
-              const Text("Hint Chat", style: TextStyle(fontWeight: FontWeight.bold)),
-              const SizedBox(height: 10),
-              ChatHistoryView(messages: data!['hint_chat']),
-              const SizedBox(height: 30),
-            ],
-
-            /// 4️⃣ TUTOR CHAT
-            if ((data!['tutor_chat'] ?? []).isNotEmpty) ...[
-              const Text("Tutor Chat", style: TextStyle(fontWeight: FontWeight.bold)),
-              const SizedBox(height: 10),
-              ChatHistoryView(messages: data!['tutor_chat']),
-            ],
+            ),
           ],
-        ),
+
+          const SizedBox(height: 30),
+
+          /// 3️⃣ HINT CHAT (new schema)
+          if (hintChat.isNotEmpty) ...[
+            const Text(
+              "Hint Chat",
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 10),
+            ChatHistoryView(messages: hintChat),
+            const SizedBox(height: 30),
+          ],
+
+          /// 4️⃣ TUTOR CHAT (new schema)
+          if (tutorChat.isNotEmpty) ...[
+            const Text(
+              "Tutor Chat",
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 10),
+            ChatHistoryView(messages: tutorChat),
+            const SizedBox(height: 30),
+          ],
+
+          /// 🔁 FALLBACK: OLD HISTORY (legacy schema)
+          if (hintChat.isEmpty && tutorChat.isEmpty && legacyChat.isNotEmpty) ...[
+            const Text(
+              "Chat History",
+              style: TextStyle(fontWeight: FontWeight.bold),
+            ),
+            const SizedBox(height: 10),
+            ChatHistoryView(messages: legacyChat),
+          ],
+        ],
       ),
-    );
-  }
+    ),
+  );
+}
 }
