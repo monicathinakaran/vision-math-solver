@@ -56,7 +56,7 @@ class ChatRequest(BaseModel):
 
 class ChatUpdate(BaseModel):
     chat_history: list
-    mode: str  # "hint" or "tutor"
+    mode: str
 
 from bson import ObjectId
 
@@ -229,9 +229,12 @@ async def update_history_chat(id: str, update: ChatUpdate):
 
         await history_collection.update_one(
             {"_id": ObjectId(id)},
-            {"$set": {field: update.chat_history}}
+            {
+                "$set": {
+                    field: update.chat_history
+                }
+            }
         )
-
         return {"message": "Chat updated"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
