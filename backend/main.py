@@ -46,6 +46,7 @@ class HistoryItem(BaseModel):
     hint_chat: list = []
     tutor_chat: list = []
     mode_used: str = "solve"
+    topic: str = None 
 
 class ChatRequest(BaseModel):
     context: str
@@ -187,12 +188,16 @@ async def chat_with_tutor(request: ChatRequest):
 @app.post("/api/history")
 async def save_history(item: HistoryItem):
     try:
+        from datetime import datetime, timezone
+
         item.timestamp = datetime.now(timezone.utc).isoformat()
+
+        # 👇 ADD THIS LINE ONLY
+        item.topic = classify_topic_with_groq(item.equation)
+
         result = await history_collection.insert_one(item.dict())
-        
-        # FIX: Return the ID immediately!
         return {
-            "message": "Saved", 
+            "message": "Saved",
             "id": str(result.inserted_id)
         }
     except Exception as e:
@@ -248,7 +253,28 @@ async def clear_chat_history(id: str):
         return {"message": "Chat cleared"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
-     
+
+@app.get("/api/dashboard/topics")
+async def dashboard_topics():
+    pipeline = [
+        {"$match": {"topic": {"$ne": None}}},
+        {
+            "$group": {
+                "_id": "$topic",
+                "count": {"$sum": 1}
+            }
+        },
+        {"$sort": {"count": -1}}
+    ]
+
+    result = []
+    async for doc in history_collection.aggregate(pipeline):
+        result.append({
+            "topic": doc["_id"],
+            "count": doc["count"]
+        })
+
+    return result
 # --- HELPER FUNCTIONS ---
 # Ensure you have imports: 
 # from sympy import sympify, solve, Symbol, Eq, parse_expr, latex
@@ -404,3 +430,46 @@ def generate_explanation(equation, solution):
     except Exception as e:
         print(f"Explanation Error: {e}")
         return "Explanation unavailable."
+
+def classify_topic_with_groq(problem_text: str) -> str:
+    prompt = f"""
+    You are classifying a math / signals problem into a
+    SINGLE, CHAPTER-LEVEL topic (not broad domains).
+
+    Follow these rules strictly:
+    1. Output ONLY the topic name.
+    2. Topic must be specific and syllabus-level.
+    3. Do NOT use generic labels like "Math", "Calculus", "Signals".
+    4. Capitalize Properly.
+
+    Examples of GOOD topics:
+    - Indefinite Integration
+    - Definite Integration
+    - Applications of Integrals
+    - First Order Differential Equations
+    - Second Order Differential Equations
+    - Continuous-Time Fourier Transform
+    - Discrete-Time Fourier Transform
+    - Properties of Fourier Transform
+    - Convolution in Time Domain
+    - Laplace Transform
+    - Inverse Laplace Transform
+    - Z-Transform
+    - Discrete-Time Signals
+    - Continuous-Time Signals
+
+    Problem:
+    {problem_text}
+
+    Respond with ONLY one topic name.
+    """
+
+    try:
+        completion = groq_client.chat.completions.create(
+            model="llama-3.1-8b-instant",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0,
+        )
+        return completion.choices[0].message.content.strip()
+    except Exception:
+        return "General"

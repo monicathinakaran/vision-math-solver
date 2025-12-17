@@ -168,7 +168,7 @@ ChatHistoryView(
           const SizedBox(height: 10),
           ChatHistoryView(
   messages: legacyChat,
-  isHintChat: false, // 🔵 blue
+  isHintChat: isHint, // 🔵 blue
 )
         ],
       ],

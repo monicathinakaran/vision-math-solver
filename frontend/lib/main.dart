@@ -6,6 +6,7 @@ import 'package:image_picker/image_picker.dart';
 import 'package:flutter_math_fork/flutter_math.dart';
 import 'chat_screen.dart'; 
 import 'HistoryDetailScreen.dart';
+import 'dashboard.dart';
 
 // --- CONFIGURATION ---
 class Config {
@@ -257,10 +258,16 @@ Future<void> _startHintSession() async {
               ),
             ),
             ListTile(
-              leading: const Icon(Icons.dashboard_outlined),
-              title: const Text("Dashboard"),
-              onTap: () => Navigator.pop(context),
-            ),
+  leading: const Icon(Icons.dashboard_outlined),
+  title: const Text("Dashboard"),
+  onTap: () {
+    Navigator.pop(context);
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => const DashboardScreen()),
+    );
+  },
+),
             ListTile(
               leading: const Icon(Icons.camera_alt_outlined),
               title: const Text("Ask AI to Solve"),
