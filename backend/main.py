@@ -44,7 +44,9 @@ class HistoryItem(BaseModel):
     solution: str = None
     explanation: str = None
     timestamp: str = None
-    chat_history: list = []
+    hint_chat: list = []
+    tutor_chat: list = []
+    mode_used: str = "solve"
 
 class ChatRequest(BaseModel):
     context: str
@@ -54,6 +56,7 @@ class ChatRequest(BaseModel):
 
 class ChatUpdate(BaseModel):
     chat_history: list
+    mode: str  # "hint" or "tutor"
 
 from bson import ObjectId
 
@@ -222,10 +225,13 @@ async def get_history_item(id: str):
 @app.put("/api/history/{id}")
 async def update_history_chat(id: str, update: ChatUpdate):
     try:
+        field = "hint_chat" if update.mode == "hint" else "tutor_chat"
+
         await history_collection.update_one(
             {"_id": ObjectId(id)},
-            {"$set": {"chat_history": update.chat_history}}
+            {"$set": {field: update.chat_history}}
         )
+
         return {"message": "Chat updated"}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
