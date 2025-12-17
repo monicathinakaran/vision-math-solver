@@ -3,7 +3,12 @@ import 'chat_screen.dart'; // ChatMathRenderer
 
 class ChatHistoryView extends StatelessWidget {
   final List messages;
-  const ChatHistoryView({super.key, required this.messages});
+  final bool isHintChat;
+    const ChatHistoryView({
+    super.key,
+    required this.messages,
+    required this.isHintChat,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -16,7 +21,9 @@ class ChatHistoryView extends StatelessWidget {
             margin: const EdgeInsets.symmetric(vertical: 6),
             padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(
-              color: isUser ? Colors.blue : Colors.white,
+color: isUser
+    ? (isHintChat ? Colors.orange : const Color(0xFF5C87FF))
+    : Colors.white,
               borderRadius: BorderRadius.circular(12),
             ),
             child: isUser

@@ -501,7 +501,25 @@ class _HistoryScreenState extends State<HistoryScreen> {
       setState(() { _isLoading = false; });
     }
   }
+String formatToIST(String isoTime) {
+  try {
+    final utcTime = DateTime.parse(isoTime).toUtc();
+    final istTime = utcTime.add(const Duration(hours: 5, minutes: 30));
 
+    final date =
+        "${istTime.day.toString().padLeft(2, '0')}-"
+        "${istTime.month.toString().padLeft(2, '0')}-"
+        "${istTime.year}";
+
+    final time =
+        "${istTime.hour.toString().padLeft(2, '0')}:"
+        "${istTime.minute.toString().padLeft(2, '0')}";
+
+    return "$date\n$time"; // 👈 two lines
+  } catch (_) {
+    return isoTime;
+  }
+}
 @override
 Widget build(BuildContext context) {
   return Scaffold(
@@ -529,7 +547,11 @@ Widget build(BuildContext context) {
                         item['equation'] ?? "Unknown Equation",
                         style: const TextStyle(fontWeight: FontWeight.bold),
                       ),
-                      subtitle: Text(item['timestamp'] ?? ""),
+                      subtitle: Text(
+  item['timestamp'] != null
+      ? formatToIST(item['timestamp'])
+      : "",
+),
                       trailing: const Icon(
                         Icons.arrow_forward_ios,
                         size: 16,
