@@ -7,13 +7,12 @@ from PIL import Image
 # --- DB IMPORTS ---
 from motor.motor_asyncio import AsyncIOMotorClient
 import certifi
-from datetime import datetime
 from dotenv import load_dotenv 
 import google.generativeai as genai
 from groq import Groq  # <-- NEW IMPORT
 from sympy import sympify, solve, Symbol, Eq, parse_expr, latex
 from sympy.parsing.sympy_parser import standard_transformations, implicit_multiplication_application
-
+from datetime import datetime, timezone
 # Load Env
 load_dotenv()
 
@@ -188,7 +187,7 @@ async def chat_with_tutor(request: ChatRequest):
 @app.post("/api/history")
 async def save_history(item: HistoryItem):
     try:
-        item.timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
+        item.timestamp = datetime.now(timezone.utc).isoformat()
         result = await history_collection.insert_one(item.dict())
         
         # FIX: Return the ID immediately!
